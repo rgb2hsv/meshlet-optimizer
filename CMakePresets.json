@@ -1,0 +1,37 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "vs2026",
+      "displayName": "Visual Studio 2026 (default on Windows)",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "vs2022",
+      "displayName": "Visual Studio 2022",
+      "inherits": "vs2026",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/build-vs2022"
+    },
+    {
+      "name": "ninja",
+      "displayName": "Ninja, Release (macOS / Linux, or a Windows developer prompt)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-ninja",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "vs2026", "configurePreset": "vs2026", "configuration": "Release" },
+    { "name": "vs2022", "configurePreset": "vs2022", "configuration": "Release" },
+    { "name": "ninja", "configurePreset": "ninja" }
+  ],
+  "testPresets": [
+    { "name": "vs2026", "configurePreset": "vs2026", "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "vs2022", "configurePreset": "vs2022", "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "ninja", "configurePreset": "ninja", "output": { "outputOnFailure": true } }
+  ]
+}

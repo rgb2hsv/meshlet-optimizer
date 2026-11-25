@@ -1,0 +1,27 @@
+[submodule "external/kdtree-cpp"]
+	path = external/kdtree-cpp
+	url = https://github.com/rgb2hsv/kdtree-cpp.git
+[submodule "external/argparse"]
+	path = external/argparse
+	url = https://github.com/p-ranav/argparse.git
+[submodule "external/LBFGSpp"]
+	path = external/LBFGSpp
+	url = https://github.com/yixuan/LBFGSpp.git
+[submodule "external/eigen"]
+	path = external/eigen
+	url = https://gitlab.com/libeigen/eigen.git
+[submodule "external/meshoptimizer"]
+	path = external/meshoptimizer
+	url = https://github.com/zeux/meshoptimizer.git
+[submodule "external/CDT"]
+	path = external/CDT
+	url = https://github.com/artem-ogre/CDT.git
+[submodule "external/cereal"]
+	path = external/cereal
+	url = https://github.com/USCiLab/cereal.git
+[submodule "external/happly"]
+	path = external/happly
+	url = https://github.com/nmwsharp/happly.git
+[submodule "external/fmt"]
+	path = external/fmt
+	url = https://github.com/fmtlib/fmt.git
