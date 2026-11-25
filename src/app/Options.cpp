@@ -38,6 +38,9 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
         .help("check every pair of levels for cracks before writing (slow with many levels)")
         .flag();
     p.add_argument("-q", "--quiet").help("only print errors").flag();
+    p.add_argument("--save-levels")
+        .help("debugging: also write every level as <dir>/level_<k>.ply, with its UVs and face regions")
+        .metavar("DIR");
 
     p.add_group("Base charts (restricted CVT)");
     p.add_argument("--chart-triangles")
@@ -93,6 +96,12 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
         .help("rings of neighbour triangles flattened with each region")
         .scan<'i', int>()
         .default_value(d.lscmPaddingRings);
+    p.add_argument("--pack-padding")
+        .help(
+            "space around each chart in a generated UV atlas (input without UVs), as a fraction of the mean "
+            "chart size")
+        .scan<'g', double>()
+        .default_value(d.packPadding);
 
     p.add_group("Remeshing");
     p.add_argument("--interior-fraction")
@@ -167,6 +176,7 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
     o.check = p.get<bool>("--check");
     o.checkCracks = p.get<bool>("--check-cracks");
     o.quiet = p.get<bool>("--quiet");
+    if (auto dir = p.present<std::string>("--save-levels")) o.saveLevels = *dir;
 
     MeshletParams& h = o.hierarchy;
     h.cvt.regularization.maxTrianglesPerChart = p.get<int>("--chart-triangles");
@@ -187,6 +197,7 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
 
     h.lscmIterations = p.get<int>("--lscm-iterations");
     h.lscmPaddingRings = p.get<int>("--lscm-padding");
+    h.packPadding = p.get<double>("--pack-padding");
 
     h.resample.interiorFraction = p.get<double>("--interior-fraction");
     h.resample.lloydIterations = p.get<int>("--resample-lloyd");
@@ -205,11 +216,11 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
     h.relaxBorders = !p.get<bool>("--no-relax-borders");
 
     if (h.cvt.regularization.maxTrianglesPerChart < 0 || h.stopAtRegions < 1 || h.maxDepth < 0 || h.maxCliqueSize < 2 ||
-        h.lscmIterations < 1 || h.lscmPaddingRings < 0 || h.splitAboveFaces < 0 ||
+        h.lscmIterations < 1 || h.lscmPaddingRings < 0 || !(h.packPadding >= 0.0) || h.splitAboveFaces < 0 ||
         !(h.resample.interiorFraction >= 0.0) || h.resample.interiorFraction > 1.0 || o.threads < 0) {
-        std::cerr
-            << "Invalid setting: --chart-triangles, --split-above-faces, --lscm-padding and --threads must be >= 0, "
-               "--stop-at-regions and --lscm-iterations >= 1, --max-clique >= 2, --interior-fraction in [0, 1]\n";
+        std::cerr << "Invalid setting: --chart-triangles, --split-above-faces, --lscm-padding, --pack-padding and "
+                     "--threads must be >= 0, "
+                     "--stop-at-regions and --lscm-iterations >= 1, --max-clique >= 2, --interior-fraction in [0, 1]\n";
         return 2;
     }
     return std::nullopt;

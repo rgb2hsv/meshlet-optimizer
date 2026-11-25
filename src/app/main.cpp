@@ -4,6 +4,7 @@
 #include <hierarchy/MeshletBuilder.hpp>
 #include <mesh/MeshProjector.hpp>
 #include <mesh/PlyReader.hpp>
+#include <mesh/PlyWriter.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -69,13 +70,28 @@ int main(int argc, char** argv)
 
     try {
         builder.build(mesh, [](const std::string& stage, double stageSeconds) {
-            std::cout << stage << " (" << stageSeconds << " s)\n";
+            std::cout << stage << " (" << stageSeconds << " s)" << std::endl;
         });
     } catch (const std::exception& e) {
         std::cerr << "Hierarchy build failed: " << e.what() << "\n";
         return 1;
     }
     builder.projectToSurface = nullptr;
+
+    if (!options.saveLevels.empty()) {
+        try {
+            std::filesystem::create_directories(options.saveLevels);
+            for (const LodLevel& level : builder.levels) {
+                const std::filesystem::path file =
+                    options.saveLevels / ("level_" + std::to_string(level.level) + ".ply");
+                WritePlyMesh(file, level.simplified, level.simplifiedFaceRegion);
+            }
+            std::cout << "Saved " << builder.levels.size() << " levels to " << options.saveLevels.string() << '\n';
+        } catch (const std::exception& e) {
+            std::cerr << "Could not save levels to " << options.saveLevels.string() << ": " << e.what() << "\n";
+            return 1;
+        }
+    }
 
     const MeshletBuilder::ExportReport& report = builder.exportReport;
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();

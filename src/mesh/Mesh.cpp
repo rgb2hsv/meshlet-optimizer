@@ -80,71 +80,48 @@ bool VertexNeighborRingIsManifold(int vertex, const std::vector<uint32_t>& nbrs)
     return true;
 }
 
-void OrderVertexNeighborRing(int vertex, std::vector<uint32_t>& nbrs, std::vector<uint32_t>& out, bool leaveTail)
+void OrderVertexNeighborRing(int vertex, const std::vector<uint32_t>& nbrs, std::vector<uint32_t>& out, bool leaveTail)
 {
     out.clear();
-    if (nbrs.empty()) {
-        return;
-    }
+    if (nbrs.empty() || !VertexNeighborRingIsManifold(vertex, nbrs)) return;
     out.reserve(nbrs.size());
-    if (!VertexNeighborRingIsManifold(vertex, nbrs)) {
-        return;
-    }
 
-    bool found;
+    // nbrs holds half-edge pairs (from, to) of the faces around the vertex. Chains are grown by joining
+    // unused pairs at either end; each pair is used once, so the walk ends even on a degenerate ring.
+    const size_t pairCount = nbrs.size() / 2;
+    std::vector<char> used(pairCount, 0);
     std::deque<uint32_t> chain;
-    chain.push_back(nbrs[0]);
-    chain.push_back(nbrs[1]);
-    nbrs[0] = UINT32_MAX;
-    nbrs[1] = UINT32_MAX;
-    do {
-        const uint32_t front = chain.front();
-        const uint32_t back = chain.back();
-        found = false;
-        for (size_t i = 0; i + 1 < nbrs.size(); i += 2) {
-            if (nbrs[i] == back) {
-                chain.push_back(nbrs[i + 1]);
-                nbrs[i + 1] = UINT32_MAX;
-                found = true;
-                break;
-            }
-        }
-
-        if (!found) {
-            for (size_t i = 1; i < nbrs.size(); i += 2) {
-                if (nbrs[i] == front) {
-                    chain.push_front(nbrs[i - 1]);
-                    nbrs[i - 1] = UINT32_MAX;
-                    found = true;
-                    break;
-                }
-            }
-        }
-        if (!found) {
-            if (!chain.empty()) {
-                if (!leaveTail && chain.front() == chain.back()) {
-                    chain.pop_back();
-                }
-                out.insert(out.end(), chain.begin(), chain.end());
-                chain.clear();
-            }
-            for (size_t i = 0; i + 1 < nbrs.size(); i += 2) {
-                if (nbrs[i] != UINT32_MAX && nbrs[i + 1] != UINT32_MAX) {
-                    chain.push_back(nbrs[i]);
-                    chain.push_back(nbrs[i + 1]);
-                    found = true;
-                    break;
-                }
-            }
-        }
-    } while (found);
-
-    if (!chain.empty()) {
-        if (!leaveTail && chain.front() == chain.back()) {
-            chain.pop_back();
-        }
+    const auto flush = [&] {
+        if (chain.empty()) return;
+        if (!leaveTail && chain.front() == chain.back()) chain.pop_back();
         out.insert(out.end(), chain.begin(), chain.end());
+        chain.clear();
+    };
+    for (size_t start = 0; start < pairCount; start++) {
+        if (used[start]) continue;
+        flush();
+        used[start] = 1;
+        chain.push_back(nbrs[2 * start]);
+        chain.push_back(nbrs[2 * start + 1]);
+        for (bool found = true; found;) {
+            found = false;
+            for (size_t i = 0; i < pairCount && !found; i++) {
+                if (!used[i] && nbrs[2 * i] == chain.back()) {
+                    used[i] = 1;
+                    chain.push_back(nbrs[2 * i + 1]);
+                    found = true;
+                }
+            }
+            for (size_t i = 0; i < pairCount && !found; i++) {
+                if (!used[i] && nbrs[2 * i + 1] == chain.front()) {
+                    used[i] = 1;
+                    chain.push_front(nbrs[2 * i]);
+                    found = true;
+                }
+            }
+        }
     }
+    flush();
 }
 
 }  // namespace
@@ -159,15 +136,18 @@ void CreateOrderedVertexNeighborTable(const Mesh& mesh, MeshListNeighborTable& v
     std::vector<std::vector<uint32_t>> vertNbrs(vertexCount);
     for (auto& nbrs : vertNbrs) nbrs.reserve(halfEdgeReserve);
     for (const Vector3u& face : mesh.triIndexes) AppendTriangleHalfEdges(face, vertNbrs);
-    size_t nonManifoldCount = 0;
     for (size_t n = 0; n < vertexCount; n++) {
-        if (!VertexNeighborRingIsManifold(static_cast<int>(n), vertNbrs[n])) {
-            nonManifoldCount++;
-            continue;
+        std::vector<uint32_t>& nbrs = vertNbrs[n];
+        if (VertexNeighborRingIsManifold(static_cast<int>(n), nbrs)) {
+            OrderVertexNeighborRing(static_cast<int>(n), nbrs, vertNbrsOut[n], leaveTail);
+        } else {
+            // A non-manifold vertex (e.g. where a remeshed level pinches) has no single ring: its neighbours
+            // are listed once each, in id order.
+            std::sort(nbrs.begin(), nbrs.end());
+            nbrs.erase(std::unique(nbrs.begin(), nbrs.end()), nbrs.end());
+            vertNbrsOut[n] = nbrs;
         }
-        OrderVertexNeighborRing(static_cast<int>(n), vertNbrs[n], vertNbrsOut[n], leaveTail);
     }
-    Expects(nonManifoldCount == 0, "{} non-manifold vertices", nonManifoldCount);
 }
 
 }  // namespace mopt

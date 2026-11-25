@@ -17,6 +17,7 @@
 //     simplifyLevelBorders() (simplifyBorders) the level's region borders coarsened, finer levels kept on them
 //   fixFlatTriangles()     flat triangles left by snapping flipped or split
 //   relaxBorders()         (relaxBorders) border vertices of every level slid to even out border edges
+//   buildUvAtlases()       without input UVs: each level's regions flattened and packed into its own UV atlas
 //   writeMlod()            every level written as one .mlod
 //
 // Each level starts from the previous level's mesh, so the surface gets coarser as the regions grow.
@@ -67,6 +68,8 @@ struct MeshletParams {
     // flattenLevel().
     int lscmIterations = 1024;
     int lscmPaddingRings = 1;
+    // buildUvAtlases(): space around each packed chart, as a fraction of the mean chart size.
+    double packPadding = 0.02;
     // Blue noise, CVT and remeshing of each region (sampleLevel() .. projectLevel()).
     RegionResampleParams resample;
     // splitLevel(): remeshed regions with more triangles are split in two; 0 turns splitting off.
@@ -152,6 +155,9 @@ private:
     // LSCM, so the region's own border triangles are not at the free boundary
     // where LSCM distorts most. The region keeps exactly its own triangles.
     bool flattenLevel();
+    // Flattens every chart of the layout (padded mosaics, planar start, one LSCM solve, padding dropped,
+    // UV area matched to 3D area); shared by flattenLevel() and buildUvAtlases().
+    void flattenCharts(ChartLayout& layout) const;
 
     // New interior points for every region of the level: 2D blue noise in its UV layout.
     bool sampleLevel();
@@ -229,6 +235,11 @@ private:
     // After the levels are built: writes all of them as one meshlet LOD file (builder.mlodFile(), MlodWriter.hpp)
     // for meshlet-viewer, after checking every pair of levels for cracks when builder.checkCracks().
     bool writeMlod();
+
+    // When the input has no texture coordinates: each level's regions are flattened (flattenCharts()) and
+    // packed (ChartBinPack) into the unit square, aspect ratios kept, and stored as the level's per-corner
+    // UVs. Every level has its own atlas; atlases of different levels overlap in UV space.
+    bool buildUvAtlases();
 
     MeshletParams params_;
     std::filesystem::path mlodFile_;

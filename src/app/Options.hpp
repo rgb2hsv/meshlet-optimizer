@@ -17,7 +17,8 @@ struct Options {
     bool check = false;            // fail unless the file was written (and, with checkCracks, no levels crack)
     bool checkCracks = false;      // check every pair of levels for cracks before writing
     bool quiet = false;
-    int threads = 0;  // 0: OpenMP default
+    int threads = 0;                   // 0: OpenMP default
+    std::filesystem::path saveLevels;  // debugging: every level as <dir>/level_<k>.ply, empty: off
     MeshletParams hierarchy;
 };
 

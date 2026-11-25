@@ -1,6 +1,7 @@
 #include <core/Check.hpp>
 #include <core/TriangleGeometry.hpp>
 #include <core/Types.hpp>
+#include <flattening/ChartBinPack.hpp>
 #include <flattening/ChartFlattening.hpp>
 #include <hierarchy/BorderSimplification.hpp>
 #include <hierarchy/DiskGroups.hpp>
@@ -167,11 +168,16 @@ void ReprojectTexcoords(LodLevel& level, const std::vector<Vector3f>& before)
     for (int v = 0; v < static_cast<int>(V); v++) {
         if (!moved[v]) continue;
         const Vector3f p = m.vertexLocations[v];
+        const auto cornerOf = [&](int f) {
+            const Vector3u t = m.triIndexes[f];
+            return 3 * f + (t[0] == static_cast<uint32_t>(v) ? 0 : t[1] == static_cast<uint32_t>(v) ? 1 : 2);
+        };
         for (int f : facesOf[v]) {
             float best = std::numeric_limits<float>::max();
-            Vector2f uv = Vector2f::Zero();
+            Vector2f uv = old[cornerOf(f)];
             for (int g : facesOf[v]) {
-                if (region[g] != region[f]) continue;
+                // Only faces on the same side of any texture seam through v: same region and same UV at v.
+                if (region[g] != region[f] || old[cornerOf(g)] != old[cornerOf(f)]) continue;
                 const Vector3u t = m.triIndexes[g];
                 Vector2f candidate;
                 const float d = TexcoordOnTriangle(p, before[t[0]], before[t[1]], before[t[2]], old[3 * g],
@@ -181,8 +187,7 @@ void ReprojectTexcoords(LodLevel& level, const std::vector<Vector3f>& before)
                     uv = candidate;
                 }
             }
-            const Vector3u t = m.triIndexes[f];
-            m.texcoords[3 * f + (t[0] == static_cast<uint32_t>(v) ? 0 : t[1] == static_cast<uint32_t>(v) ? 1 : 2)] = uv;
+            m.texcoords[cornerOf(f)] = uv;
         }
     }
 }
@@ -282,6 +287,7 @@ void MeshletBuilder::build(const Mesh& input, const StatusHandler& status)
         stage("Flat triangles", [&] { return fixFlatTriangles(); });
         if (params_.relaxBorders) stage("Border relaxation", [&] { return relaxBorders(); });
     }
+    stage("UV atlases", [&] { return buildUvAtlases(); });
     stage("Write " + mlodFile_.string(), [&] { return writeMlod(); });
 }
 }  // namespace mopt
@@ -541,31 +547,34 @@ bool MeshletBuilder::cutLevel()
 
 bool MeshletBuilder::flattenLevel()
 {
-    MeshletBuilder& builder = *this;
-    LevelWork& work = WorkAt(builder, "LevelLSCM", false);
-    ChartLayout& level = *work.layout;
-    BuildMosaics(level, true);
+    flattenCharts(*WorkAt(*this, "LevelLSCM", false).layout);
+    return true;
+}
+
+void MeshletBuilder::flattenCharts(ChartLayout& layout) const
+{
+    BuildMosaics(layout, true);
     // Pad every region with rings of its neighbours' triangles; dilation
     // appends faces and vertices, so the region's own come first.
-    std::vector<size_t> ownFaces(level.mosaics.size()), ownVertices(level.mosaics.size());
-    for (size_t i = 0; i < level.mosaics.size(); i++) {
-        ownFaces[i] = level.mosaics[i].faces.size();
-        ownVertices[i] = level.mosaics[i].vertexes.size();
+    std::vector<size_t> ownFaces(layout.mosaics.size()), ownVertices(layout.mosaics.size());
+    for (size_t i = 0; i < layout.mosaics.size(); i++) {
+        ownFaces[i] = layout.mosaics[i].faces.size();
+        ownVertices[i] = layout.mosaics[i].vertexes.size();
     }
     if (params_.lscmPaddingRings > 0) {
-        if (level.vertNbrs.size() != level.mesh.vertexLocations.size()) {
-            MakeOrderedVertexNeighborTable(level.mesh, level.vertNbrs);
+        if (layout.vertNbrs.size() != layout.mesh.vertexLocations.size()) {
+            MakeOrderedVertexNeighborTable(layout.mesh, layout.vertNbrs);
         }
-        DilateMosaics(level, params_.lscmPaddingRings);
-        level.totalVertexCount = level.textureToMeshMap.size();
+        DilateMosaics(layout, params_.lscmPaddingRings);
+        layout.totalVertexCount = layout.textureToMeshMap.size();
     }
-    BuildMosaicNeighborTables(level);
-    ProjectMosaicsToPlanes(level);
-    SolveLscm(level, params_.lscmIterations);
+    BuildMosaicNeighborTables(layout);
+    ProjectMosaicsToPlanes(layout);
+    SolveLscm(layout, params_.lscmIterations);
     if (params_.lscmPaddingRings > 0) {
         // Drop the padding: each region keeps exactly its own triangles.
-        for (size_t i = 0; i < level.mosaics.size(); i++) {
-            Mosaic& mosaic = level.mosaics[i];
+        for (size_t i = 0; i < layout.mosaics.size(); i++) {
+            Mosaic& mosaic = layout.mosaics[i];
             for (size_t v = ownVertices[i]; v < mosaic.vertexes.size(); v++) {
                 mosaic.vertexMap.erase(mosaic.vertexes[v].mapId);
             }
@@ -573,7 +582,40 @@ bool MeshletBuilder::flattenLevel()
             mosaic.vertexes.resize(ownVertices[i]);
         }
         // UV area back in proportion to each region's own 3D area.
-        RescaleMosaics(level);
+        RescaleMosaics(layout);
+    }
+}
+
+bool MeshletBuilder::buildUvAtlases()
+{
+    if (mesh.hasTexcoords()) return false;
+    const ChartBinPack packer(params_.packPadding);
+    for (LodLevel& level : levels) {
+        ChartLayout layout;
+        layout.mesh = level.simplified;
+        layout.mesh.texcoords.clear();
+        if (layout.mesh.vertexNormals.size() != layout.mesh.vertexLocations.size()) {
+            layout.mesh.updateVertexNormals();
+        }
+        layout.faceLabels = level.simplifiedFaceRegion;
+        layout.vertLabels = level.simplifiedVertexRegion;
+        for (int r : layout.faceLabels) layout.chartCount = std::max(layout.chartCount, r + 1);
+        flattenCharts(layout);
+        packer.pack(layout.mosaics);
+
+        Mesh& out = level.simplified;
+        out.texcoords.assign(3 * out.triIndexes.size(), Vector2f::Zero());
+        std::vector<char> covered(out.triIndexes.size(), 0);
+        for (const Mosaic& mosaic : layout.mosaics) {
+            for (const MosaicFace& face : mosaic.faces) {
+                for (int c = 0; c < 3; c++) {
+                    out.texcoords[3 * face.fid + c] = mosaic.getLocalVertex(face.mapFace[c]).uv.cast<float>();
+                }
+                covered[face.fid] = 1;
+            }
+        }
+        const size_t missing = std::count(covered.begin(), covered.end(), 0);
+        Expects(missing == 0, "Level {}: {} faces have no chart in the UV atlas", level.level, missing);
     }
     return true;
 }
@@ -1024,6 +1066,15 @@ std::vector<int> FixFlatTriangles(LodLevel& level, double minAngle, double cosMa
             if (region[g] != region[f]) {
                 continue;
             }
+            if (m.hasTexcoords()) {
+                // A texture seam can end inside a region: leave pairs that meet along one alone, as their shared
+                // vertices have a different texture coordinate on each side.
+                const auto cornerUv = [&](int h, uint32_t v) {
+                    const auto ht = tri(h);
+                    return m.texcoords[3 * h + (ht[0] == v ? 0 : ht[1] == v ? 1 : 2)];
+                };
+                if (cornerUv(f, p) != cornerUv(g, p) || cornerUv(f, q) != cornerUv(g, q)) continue;
+            }
             const auto gt = tri(g);
             uint32_t w = UINT32_MAX;
             for (uint32_t v : gt) {
@@ -1036,7 +1087,7 @@ std::vector<int> FixFlatTriangles(LodLevel& level, double minAngle, double cosMa
                 const std::array<std::array<uint32_t, 3>, 4> flip{{{mv, q, w}, {w, p, mv}, {}, {}}};
                 if (good(flip, 2, reference, {}, minAngle)) {
                     if (m.hasTexcoords()) {
-                        // The pair lies in one region, so each of its vertices has one texture coordinate.
+                        // The pair meets along no seam, so each of its vertices has one texture coordinate.
                         const auto uvOf = [&](uint32_t v) {
                             for (int h : {f, g}) {
                                 const auto ht = tri(h);

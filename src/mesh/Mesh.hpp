@@ -37,7 +37,7 @@ std::basic_ostream<C, R>& operator<<(std::basic_ostream<C, R>& ss, const Mesh& m
 }
 
 using MeshListNeighborTable = std::vector<std::vector<uint32_t>>;
-// Each vertex's neighbours in face order around it (the ring must be manifold).
+// Each vertex's neighbours in face order around it; a non-manifold vertex lists them in id order.
 void CreateOrderedVertexNeighborTable(const Mesh& mesh, MeshListNeighborTable& vertNbrs, bool leaveTail = false);
 inline void MakeOrderedVertexNeighborTable(const Mesh& mesh, MeshListNeighborTable& vertNbrs, bool leaveTail = false)
 {
