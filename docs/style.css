@@ -471,22 +471,6 @@ figure.diagram svg .box.loop { stroke: var(--accent); }
 figure.diagram svg .arrow { stroke: var(--text-faint); stroke-width: 1.6; fill: none; }
 figure.diagram svg .accent { fill: var(--accent); }
 
-/* Key numbers under the abstract. */
-.stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
-  margin: 22px 0 0;
-}
-.stat {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px 14px;
-}
-.stat b { display: block; font-size: 22px; color: var(--heading); font-variant-numeric: tabular-nums; }
-.stat span { font-size: 12.5px; color: var(--text-muted); }
-
 /* Side-by-side screenshots in one figure. */
 .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
 .shots img { aspect-ratio: auto; }

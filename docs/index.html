@@ -88,16 +88,10 @@
     <p>Cluster-based level of detail renders a mesh as a cut through a directed acyclic graph of small triangle clusters (meshlets), swapping groups of fine clusters for coarser ones as they shrink on screen. The usual construction simplifies each group with its outer border locked, which keeps neighbouring clusters crack-free but leaves the border at full resolution on every level and produces clusters whose shape follows whatever the simplifier left. <strong>meshlet-optimizer</strong> builds the DAG the other way around: it first segments the surface into compact, disk-shaped charts with a restricted centroidal Voronoi tessellation, then merges cliques of adjacent charts level by level into a region hierarchy. Each new region is flattened with least-squares conformal maps and remeshed in the plane with blue noise, a restricted 2D CVT and a constrained Delaunay triangulation, while its border is coarsened by edge collapses whose removed vertices are snapped onto the coarser border on every finer level. Borders are therefore <em>nested</em>: every border of every level lies on the borders of the levels below it, so any mix of levels drawn side by side is crack-free, and borders get coarser along with the interiors. Every region becomes exactly one meshlet, groups are the regions that merge into one parent, and the result is written as a <code>.mlod</code> file that <a href="https://github.com/rgb2hsv/meshlet-viewer">meshlet-viewer</a> renders with mesh shaders. Texture seams are kept as region borders, so UVs are carried through every level; a mesh without UVs instead gets one packed atlas per level. On a 600K-triangle scanned figure the texture sampled at level 4 lies within 1.9 mean edge lengths of the right surface point for 99% of triangles.</p>
   </div>
 
-  <div class="stats">
-    <div class="stat"><b>1 meshlet</b><span>per region per level</span></div>
-    <div class="stat"><b>0 cracks</b><span>between any two levels (checked)</span></div>
-    <div class="stat"><b>24 s</b><span>metasphere, 132K triangles, 10 levels</span></div>
-    <div class="stat"><b>150 s</b><span>cosplay scan, 600K triangles, 13 levels</span></div>
-  </div>
   <div class="pills">
     <span class="pill">C++20</span><span class="pill">OpenMP</span><span class="pill">Eigen</span>
     <span class="pill">Restricted CVT</span><span class="pill">LSCM</span><span class="pill">Constrained Delaunay</span>
-    <span class="pill">L-BFGS</span><span class="pill">meshoptimizer clusterlod BVH</span><span class="pill">Windows · macOS</span>
+    <span class="pill">L-BFGS</span><span class="pill">meshoptimizer clusterlod BVH</span><span class="pill">Windows · Linux · macOS</span>
   </div>
 </header>
 
@@ -329,8 +323,14 @@
 
 <h3 id="r-levels"><span class="num">4.2</span>Level structure<a class="anchor" href="#r-levels" aria-label="Link to this section"></a></h3>
 <figure id="fig-metasphere">
-  <img src="figures/metasphere-levels.png" alt="Metasphere levels 0, 2, 4, 6 and 9 colored by region" width="1532" height="300">
-  <figcaption><span class="fig">Figure 10.</span> Metasphere levels 0, 2, 4, 6 and 9, colored by region (one region = one meshlet), region borders dark, triangle edges drawn where triangles are large enough to see. Borders coarsen along with the interiors, and every border is a subset of the borders to its left.</figcaption>
+  <div class="shots">
+    <div><img src="figures/viewer-metasphere-level0.png" alt="metasphere level 0 in meshlet-viewer" width="700" height="700" loading="lazy"><span class="sub">level 0 · 1,138 meshlets</span></div>
+    <div><img src="figures/viewer-metasphere-level2.png" alt="metasphere level 2 in meshlet-viewer" width="700" height="700" loading="lazy"><span class="sub">level 2 · 258 meshlets</span></div>
+    <div><img src="figures/viewer-metasphere-level4.png" alt="metasphere level 4 in meshlet-viewer" width="700" height="700" loading="lazy"><span class="sub">level 4 · 56 meshlets</span></div>
+    <div><img src="figures/viewer-metasphere-level6.png" alt="metasphere level 6 in meshlet-viewer" width="700" height="700" loading="lazy"><span class="sub">level 6 · 22 meshlets</span></div>
+    <div><img src="figures/viewer-metasphere-level9.png" alt="metasphere level 9 in meshlet-viewer" width="700" height="700" loading="lazy"><span class="sub">level 9 · 4 meshlets</span></div>
+  </div>
+  <figcaption><span class="fig">Figure 10.</span> The metasphere <code>.mlod</code> in meshlet-viewer at fixed DAG levels 0, 2, 4, 6 and 9 (<code>--lod-level</code>), as the viewer draws it: every meshlet of a level in that level's color (lighter is finer), meshlet outlines in black, triangle wireframe in thin lines. One region is one meshlet. Borders coarsen along with the interiors, and every border is drawn along borders of the finer levels.</figcaption>
 </figure>
 
 <div class="table-wrap">
@@ -354,23 +354,19 @@
 
 <p>The metasphere gives 10 levels, 2,379 meshlets in 823 groups and 222,748 triangles over all levels, 1.68× the input. After level 1 every level has 40–45% of the triangles of the one below, and regions settle at about 80 triangles, a third of the meshlet limit: the split threshold keeps them from growing, and border simplification keeps the border share of each region roughly constant. Level 1 has smaller regions than level 0 because the many merges that exceed 256 triangles are split in two.</p>
 
-<figure id="fig-viewer-levels">
-  <div class="shots">
-    <div><img src="figures/viewer-metasphere-level0.png" alt="metasphere level 0 in meshlet-viewer" width="900" height="900" loading="lazy"><span class="sub">level 0 · 1,138 meshlets</span></div>
-    <div><img src="figures/viewer-metasphere-level3.png" alt="metasphere level 3 in meshlet-viewer" width="900" height="900" loading="lazy"><span class="sub">level 3 · 111 meshlets</span></div>
-    <div><img src="figures/viewer-metasphere-level6.png" alt="metasphere level 6 in meshlet-viewer" width="900" height="900" loading="lazy"><span class="sub">level 6 · 22 meshlets</span></div>
-  </div>
-  <figcaption><span class="fig">Figure 11.</span> The metasphere <code>.mlod</code> in meshlet-viewer at fixed DAG levels (<code>--lod-level</code>): one meshlet per region, outlined in black, with the triangle wireframe in thin lines.</figcaption>
-</figure>
-
 <figure id="fig-cosplay">
-  <img src="figures/cosplay-levels.png" alt="Cosplay levels 1, 3, 5 and 12 colored by region" width="1368" height="560">
-  <figcaption><span class="fig">Figure 12.</span> Cosplay levels 1, 3, 5 and 12. Regions never cross UV seams, so small texture islands (buttons, straps, eyes) remain separate regions up to the top level.</figcaption>
+  <div class="shots">
+    <div><img src="figures/viewer-cosplay-level1.png" alt="cosplay level 1 in meshlet-viewer" width="700" height="1000" loading="lazy"><span class="sub">level 1 · 3,914 regions</span></div>
+    <div><img src="figures/viewer-cosplay-level3.png" alt="cosplay level 3 in meshlet-viewer" width="700" height="1000" loading="lazy"><span class="sub">level 3 · 705 regions</span></div>
+    <div><img src="figures/viewer-cosplay-level5.png" alt="cosplay level 5 in meshlet-viewer" width="700" height="1000" loading="lazy"><span class="sub">level 5 · 353 regions</span></div>
+    <div><img src="figures/viewer-cosplay-level12.png" alt="cosplay level 12 in meshlet-viewer" width="700" height="1000" loading="lazy"><span class="sub">level 12 · 299 regions</span></div>
+  </div>
+  <figcaption><span class="fig">Figure 11.</span> The cosplay <code>.mlod</code> in meshlet-viewer at fixed DAG levels 1, 3, 5 and 12, each in its level's color with meshlet outlines. Regions never cross UV seams, so small texture islands (buttons, straps, eyes) remain separate meshlets up to the top level.</figcaption>
 </figure>
 
 <div class="table-wrap">
 <table>
-<caption><span class="fig">Table 2.</span> Levels of the cosplay scan. From level 6 on, most regions are whole UV islands and can no longer merge.</caption>
+<caption><span class="fig">Table 2.</span> The first eight levels of the cosplay scan (levels 0–7 of 13). From level 6 on, most regions are whole UV islands and can no longer merge; levels 8–12 keep 299 regions.</caption>
 <thead><tr><th class="n">Level</th><th class="n">Vertices</th><th class="n">Triangles</th><th class="n">Regions</th><th class="n">Triangles / region</th></tr></thead>
 <tbody>
 <tr><td class="n">0</td><td class="n">299,816</td><td class="n">599,698</td><td class="n">10,441</td><td class="n">57.4</td></tr>
@@ -378,9 +374,9 @@
 <tr><td class="n">2</td><td class="n">49,753</td><td class="n">99,572</td><td class="n">1,490</td><td class="n">66.8</td></tr>
 <tr><td class="n">3</td><td class="n">22,966</td><td class="n">45,998</td><td class="n">705</td><td class="n">65.2</td></tr>
 <tr><td class="n">4</td><td class="n">12,389</td><td class="n">24,844</td><td class="n">449</td><td class="n">55.3</td></tr>
+<tr><td class="n">5</td><td class="n">7,942</td><td class="n">15,950</td><td class="n">353</td><td class="n">45.2</td></tr>
 <tr><td class="n">6</td><td class="n">6,292</td><td class="n">12,650</td><td class="n">319</td><td class="n">39.7</td></tr>
-<tr><td class="n">9</td><td class="n">5,498</td><td class="n">11,062</td><td class="n">299</td><td class="n">37.0</td></tr>
-<tr><td class="n">12</td><td class="n">5,490</td><td class="n">11,046</td><td class="n">299</td><td class="n">36.9</td></tr>
+<tr><td class="n">7</td><td class="n">5,677</td><td class="n">11,420</td><td class="n">302</td><td class="n">37.8</td></tr>
 </tbody>
 </table>
 </div>
@@ -392,33 +388,34 @@
 <caption><span class="fig">Table 3.</span> Stage times in seconds, 20 threads. The metasphere run includes the atlas stage (no input UVs); totals include reading the PLY and building the projection tree.</caption>
 <thead><tr><th>Stage</th><th class="n">Metasphere</th><th class="n">Cosplay</th></tr></thead>
 <tbody>
-<tr><td>Base charts (RCVT, regularization, seams)</td><td class="n">2.45</td><td class="n">15.94</td></tr>
-<tr><td>Level loop (all levels)</td><td class="n">3.37</td><td class="n">29.67</td></tr>
-<tr><td>Flat triangles</td><td class="n">0.44</td><td class="n">5.73</td></tr>
-<tr><td>Border relaxation</td><td class="n">14.97</td><td class="n">95.35</td></tr>
-<tr><td>UV atlases</td><td class="n">1.87</td><td class="n">—</td></tr>
-<tr><td>Write .mlod</td><td class="n">0.31</td><td class="n">1.98</td></tr>
-<tr class="best"><td><strong>Total</strong></td><td class="n"><strong>23.8</strong></td><td class="n"><strong>150.5</strong></td></tr>
+<tr><td>Base charts (RCVT, regularization, seams)</td><td class="n">2.45</td><td class="n">15.37</td></tr>
+<tr><td>Level loop (all levels)</td><td class="n">3.35</td><td class="n">27.02</td></tr>
+<tr><td>Flat triangles</td><td class="n">0.38</td><td class="n">5.72</td></tr>
+<tr><td>Border relaxation</td><td class="n">14.69</td><td class="n">92.49</td></tr>
+<tr><td>UV atlases</td><td class="n">1.85</td><td class="n">—</td></tr>
+<tr><td>Write .mlod</td><td class="n">0.33</td><td class="n">2.03</td></tr>
+<tr class="best"><td><strong>Total</strong></td><td class="n"><strong>23.1</strong></td><td class="n"><strong>143.4</strong></td></tr>
 </tbody>
 </table>
 </div>
-<p>The border relaxation dominates: it optimizes every border vertex of every level jointly, and most of its time is spent inside LBFGSpp's bound-constrained line search rather than in the energy and gradient evaluation, which are parallel. The level loop itself is fast because each level is a fraction of the one below; level 1 alone accounts for half of it. Earlier versions of the pipeline took about 70 s on the metasphere; the factored LSCM solve (15 s → 1.7 s) and an analytic relaxation gradient (53 s → 15 s) account for most of the difference.</p>
+<p>The border relaxation dominates: it optimizes every border vertex of every level jointly, and most of its time is spent inside LBFGSpp's bound-constrained line search rather than in the energy and gradient evaluation, which are parallel. The level loop itself is fast because each level is a fraction of the one below; level 1 alone accounts for half of it on the metasphere and a third on cosplay. Earlier versions of the pipeline took about 70 s on the metasphere; the factored LSCM solve (15 s → 1.7 s) and an analytic relaxation gradient (53 s → 15 s) account for most of the difference.</p>
 
 <h3 id="r-uv"><span class="num">4.4</span>Texture fidelity<a class="anchor" href="#r-uv" aria-label="Link to this section"></a></h3>
 <p>Measuring UV accuracy on a coarse level needs care. Comparing a triangle's UV with the UV of the <em>nearest</em> point on the input fails on thin parts (fingers, straps, cloth edges), where the nearest point of a coarse triangle can lie on a different island, and gave spurious errors of thousands of texels. We instead measure in the direction the renderer uses the data: for every output triangle, take the UV at its centroid, find the input triangle that contains that UV (choosing the nearest in 3D when the atlas reuses texture area), map it to its 3D point, and report the distance <i>d</i><sub>tex</sub> from the triangle's centroid to that point. It is compared with the geometric error <i>d</i><sub>geo</sub>, the centroid's distance to the input surface. Distances are in input mean edge lengths (3.40 units). A triangle is counted as <em>mismatched</em> when <i>d</i><sub>tex</sub> &gt; <i>d</i><sub>geo</sub> + 4.</p>
 
 <div class="table-wrap">
 <table>
-<caption><span class="fig">Table 4.</span> Texture fidelity on cosplay: geometric error vs. distance to the surface point the texture is sampled from, in mean edge lengths (p50 / p99), mismatched triangles and triangles whose UV centroid falls outside every input chart by more than 2 texels.</caption>
+<caption><span class="fig">Table 4.</span> Texture fidelity on cosplay, levels 0–7: geometric error vs. distance to the surface point the texture is sampled from, in mean edge lengths (p50 / p99), mismatched triangles and triangles whose UV centroid falls outside every input chart by more than 2 texels.</caption>
 <thead><tr><th class="n">Level</th><th class="n">d<sub>geo</sub> p50</th><th class="n">d<sub>geo</sub> p99</th><th class="n">d<sub>tex</sub> p50</th><th class="n">d<sub>tex</sub> p99</th><th class="n">Mismatched</th><th class="n">Off-chart</th></tr></thead>
 <tbody>
 <tr><td class="n">0</td><td class="n">0.01</td><td class="n">0.19</td><td class="n">0.02</td><td class="n">0.34</td><td class="n">1</td><td class="n">0.00%</td></tr>
 <tr><td class="n">1</td><td class="n">0.04</td><td class="n">0.34</td><td class="n">0.07</td><td class="n">0.45</td><td class="n">2</td><td class="n">0.00%</td></tr>
 <tr><td class="n">2</td><td class="n">0.07</td><td class="n">0.55</td><td class="n">0.11</td><td class="n">0.68</td><td class="n">1</td><td class="n">0.01%</td></tr>
-<tr><td class="n">4</td><td class="n">0.20</td><td class="n">1.34</td><td class="n">0.26</td><td class="n">1.87</td><td class="n">0</td><td class="n">0.05%</td></tr>
+<tr><td class="n">3</td><td class="n">0.13</td><td class="n">0.88</td><td class="n">0.16</td><td class="n">1.14</td><td class="n">1</td><td class="n">0.03%</td></tr>
+<tr><td class="n">4</td><td class="n">0.20</td><td class="n">1.34</td><td class="n">0.26</td><td class="n">1.87</td><td class="n">1</td><td class="n">0.05%</td></tr>
+<tr><td class="n">5</td><td class="n">0.26</td><td class="n">1.93</td><td class="n">0.34</td><td class="n">2.85</td><td class="n">5 (0.03%)</td><td class="n">0.10%</td></tr>
 <tr><td class="n">6</td><td class="n">0.29</td><td class="n">2.44</td><td class="n">0.38</td><td class="n">3.70</td><td class="n">14 (0.11%)</td><td class="n">0.17%</td></tr>
-<tr><td class="n">9</td><td class="n">0.29</td><td class="n">3.58</td><td class="n">0.39</td><td class="n">5.14</td><td class="n">28 (0.25%)</td><td class="n">0.21%</td></tr>
-<tr><td class="n">12</td><td class="n">0.28</td><td class="n">3.66</td><td class="n">0.39</td><td class="n">5.44</td><td class="n">28 (0.25%)</td><td class="n">0.21%</td></tr>
+<tr><td class="n">7</td><td class="n">0.29</td><td class="n">3.02</td><td class="n">0.39</td><td class="n">4.39</td><td class="n">20 (0.18%)</td><td class="n">0.19%</td></tr>
 </tbody>
 </table>
 </div>
@@ -430,19 +427,19 @@
     <div><img src="figures/viewer-cosplay-uv-level4.png" alt="cosplay level 4 UV grid" width="700" height="1000" loading="lazy"><span class="sub">level 4</span></div>
     <div><img src="figures/viewer-cosplay-uv-level9.png" alt="cosplay level 9 UV grid" width="700" height="1000" loading="lazy"><span class="sub">level 9</span></div>
   </div>
-  <figcaption><span class="fig">Figure 13.</span> Cosplay's own texture coordinates in meshlet-viewer's UV grid (<code>--uv-grid</code>) at levels 0, 4 and 9. The grid follows the input atlas on every level: it stays continuous across meshlets inside each UV island and breaks only at the input's texture seams, which are region borders.</figcaption>
+  <figcaption><span class="fig">Figure 12.</span> Cosplay's own texture coordinates in meshlet-viewer's UV grid (<code>--uv-grid</code>) at levels 0, 4 and 9. The grid follows the input atlas on every level: it stays continuous across meshlets inside each UV island and breaks only at the input's texture seams, which are region borders.</figcaption>
 </figure>
 
 <h3 id="r-atlas"><span class="num">4.5</span>Generated atlases<a class="anchor" href="#r-atlas" aria-label="Link to this section"></a></h3>
 <figure id="fig-atlas">
   <img src="figures/metasphere-atlases.png" alt="UV atlases of metasphere levels 0, 3, 6 and 9" width="1224" height="300">
-  <figcaption><span class="fig">Figure 14.</span> Generated UV atlases of metasphere levels 0, 3, 6 and 9 (1,138, 111, 22 and 4 charts), one per level, each filling the unit square. Charts keep their shape and their relative size: all charts of a level share one scale.</figcaption>
+  <figcaption><span class="fig">Figure 13.</span> Generated UV atlases of metasphere levels 0, 3, 6 and 9 (1,138, 111, 22 and 4 charts), one per level, each filling the unit square. Charts keep their shape and their relative size: all charts of a level share one scale.</figcaption>
 </figure>
 <p>Every atlas was rasterized at 1024² and checked: all UVs lie in [0, 1]², the ratio of UV area to 3D area is identical for every chart of a level (min/median = max/median = 1.000), and no pixel is covered by two charts. Coverage falls from 62% at level 0, where many similar small charts pack tightly, to 40–45% for the few large, irregular charts of coarse levels. The two coarsest levels each contain one triangle folded by LSCM (level 9: 254 pixels of self-overlap within one chart), a limitation of flattening very large curved regions conformally.</p>
 
 <figure id="fig-viewer-atlas">
   <img src="figures/viewer-metasphere-atlas-level2.png" alt="metasphere level 2 generated atlas as a UV grid" width="900" height="900" loading="lazy" style="max-width:560px;margin:0 auto">
-  <figcaption><span class="fig">Figure 15.</span> The generated atlas of metasphere level 2 as a UV grid in meshlet-viewer: nearly square cells (LSCM is conformal), continuous inside every chart, breaking only at chart borders.</figcaption>
+  <figcaption><span class="fig">Figure 14.</span> The generated atlas of metasphere level 2 as a UV grid in meshlet-viewer: nearly square cells (LSCM is conformal), continuous inside every chart, breaking only at chart borders.</figcaption>
 </figure>
 
 <h3 id="r-validation"><span class="num">4.6</span>Validation<a class="anchor" href="#r-validation" aria-label="Link to this section"></a></h3>
@@ -453,7 +450,7 @@
 <h2><span class="num">5</span>Limitations<a class="anchor" href="#limitations" aria-label="Link to this section"></a></h2>
 <ul>
   <li><strong>UV islands bound the coarsest level.</strong> Regions never cross a seam, so a textured model cannot get coarser than one region per island (299 regions on cosplay). Merging across seams would need texture-space resampling (baking) of the merged region.</li>
-  <li><strong>Border relaxation cost.</strong> The joint optimization over all levels takes 60% of the running time; a per-level or block-coordinate scheme would parallelize better.</li>
+  <li><strong>Border relaxation cost.</strong> The joint optimization over all levels takes almost two thirds of the running time (64% on both models); a per-level or block-coordinate scheme would parallelize better.</li>
   <li><strong>Conformal folds.</strong> LSCM can fold large curved regions. The remeshing stage detects folds and falls back to 3D decimation, and the atlas stage keeps the fold (one triangle on the coarsest metasphere levels). A bijective parametrization would remove both.</li>
   <li><strong>Storage.</strong> Every level stores its own vertices and triangles (1.68× the input's triangles over all levels on the metasphere, 1.84× on cosplay), and nested borders keep collinear border vertices on finer levels that a single-level simplifier would remove.</li>
   <li><strong>Atlases per level.</strong> Generated atlases are independent per level, so a texture must be baked for each level that is drawn.</li>
@@ -566,12 +563,10 @@ meshlets cosplay.mlod          <span class="c"># meshlet-viewer</span></code></p
 </div>
 
 <h3 id="a-figures"><span class="num">E</span>Reproducing the figures<a class="anchor" href="#a-figures" aria-label="Link to this section"></a></h3>
-<p>Every figure is generated by a script in <code>docs/figures</code> that needs nothing beyond the Python standard library. The step diagrams (Figures 2–8) run simplified planar versions of the tool's algorithms on a small Delaunay mesh (<code>make_diagrams.py</code>). The level renders and atlases are drawn from <code>--save-levels</code> output with a z-buffered rasterizer and a zlib PNG writer (<code>plyfig.py</code>), and the screenshots are taken with meshlet-viewer's <code>--screenshot</code> (<code>make_viewer_shots.py</code>).</p>
+<p>Every figure is generated by a script in <code>docs/figures</code> that needs nothing beyond the Python standard library. The step diagrams (Figures 2–8) run simplified planar versions of the tool's algorithms on a small Delaunay mesh (<code>make_diagrams.py</code>). The UV atlases are drawn from <code>--save-levels</code> output with a small rasterizer and a zlib PNG writer (<code>plyfig.py</code>, <code>make_atlas.py</code>). Every rendering of the meshes is a meshlet-viewer screenshot of the <code>.mlod</code> files themselves, taken with its <code>--screenshot</code> option (<code>make_viewer_shots.py</code>).</p>
 <pre><code>meshlet-optimizer assets/model/metasphere.ply -o metasphere.mlod --save-levels levels/metasphere
-meshlet-optimizer assets/model/cosplay.ply -o cosplay.mlod --save-levels levels/cosplay
+meshlet-optimizer assets/model/cosplay.ply -o cosplay.mlod
 cd docs/figures
-python make_level_renders.py ../../levels/metasphere metasphere-levels.png --levels 0 2 4 6 9 --size 300
-python make_level_renders.py ../../levels/cosplay cosplay-levels.png --levels 1 3 5 12 --size 560 --aspect 0.6 --yaw 25 --pitch 8
 python make_atlas.py ../../levels/metasphere metasphere-atlases.png --levels 0 3 6 9 --size 300
 python make_diagrams.py
 python make_viewer_shots.py path/to/meshlets metasphere.mlod cosplay.mlod</code></pre>
