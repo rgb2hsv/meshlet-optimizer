@@ -73,7 +73,17 @@ if(MOPT_OPENMP)
       endif()
     endforeach()
   endif()
-  if(MSVC)
+  if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    # clang-cl: FindOpenMP does not know it; use LLVM's runtime from the compiler's own installation
+    # (Visual Studio's ClangCL toolset ships libomp.lib and libomp.dll next to clang-cl).
+    get_filename_component(MOPT_LLVM_BIN ${CMAKE_CXX_COMPILER} DIRECTORY)
+    find_library(MOPT_LIBOMP NAMES libomp HINTS ${MOPT_LLVM_BIN}/../lib NO_DEFAULT_PATH)
+    if(MOPT_LIBOMP)
+      set(OpenMP_CXX_FLAGS "-Xclang -fopenmp")
+      set(OpenMP_CXX_LIB_NAMES libomp)
+      set(OpenMP_libomp_LIBRARY ${MOPT_LIBOMP})
+    endif()
+  elseif(MSVC)
     # The default /openmp is OpenMP 2.0 (signed loop indices only); LLVM's runtime supports 3.x+.
     set(OpenMP_RUNTIME_MSVC llvm)
   endif()
@@ -89,6 +99,12 @@ endif()
 add_executable(meshlet-optimizer src/app/main.cpp src/app/Options.cpp src/app/Options.hpp)
 target_link_libraries(meshlet-optimizer PRIVATE mopt_core)
 set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT meshlet-optimizer)
+if(MOPT_LIBOMP AND OpenMP_CXX_FOUND AND EXISTS ${MOPT_LLVM_BIN}/libomp.dll)
+  # clang-cl's OpenMP runtime is not on the PATH: keep a copy next to the executable.
+  add_custom_command(TARGET meshlet-optimizer POST_BUILD
+                     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MOPT_LLVM_BIN}/libomp.dll
+                             $<TARGET_FILE_DIR:meshlet-optimizer>)
+endif()
 
 enable_testing()
 add_test(NAME metasphere

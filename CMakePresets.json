@@ -17,21 +17,39 @@
       "binaryDir": "${sourceDir}/build-vs2022"
     },
     {
+      "name": "vs2022-clang",
+      "displayName": "Visual Studio 2022, clang-cl (ClangCL toolset)",
+      "inherits": "vs2022",
+      "toolset": "ClangCL",
+      "binaryDir": "${sourceDir}/build-vs2022-clang"
+    },
+    {
       "name": "ninja",
       "displayName": "Ninja, Release (macOS / Linux, or a Windows developer prompt)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-ninja",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "ninja-clang",
+      "displayName": "Ninja, Release, Clang (Linux / macOS)",
+      "inherits": "ninja",
+      "binaryDir": "${sourceDir}/build-ninja-clang",
+      "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++" }
     }
   ],
   "buildPresets": [
     { "name": "vs2026", "configurePreset": "vs2026", "configuration": "Release" },
     { "name": "vs2022", "configurePreset": "vs2022", "configuration": "Release" },
-    { "name": "ninja", "configurePreset": "ninja" }
+    { "name": "vs2022-clang", "configurePreset": "vs2022-clang", "configuration": "Release" },
+    { "name": "ninja", "configurePreset": "ninja" },
+    { "name": "ninja-clang", "configurePreset": "ninja-clang" }
   ],
   "testPresets": [
     { "name": "vs2026", "configurePreset": "vs2026", "configuration": "Release", "output": { "outputOnFailure": true } },
     { "name": "vs2022", "configurePreset": "vs2022", "configuration": "Release", "output": { "outputOnFailure": true } },
-    { "name": "ninja", "configurePreset": "ninja", "output": { "outputOnFailure": true } }
+    { "name": "vs2022-clang", "configurePreset": "vs2022-clang", "configuration": "Release", "output": { "outputOnFailure": true } },
+    { "name": "ninja", "configurePreset": "ninja", "output": { "outputOnFailure": true } },
+    { "name": "ninja-clang", "configurePreset": "ninja-clang", "output": { "outputOnFailure": true } }
   ]
 }

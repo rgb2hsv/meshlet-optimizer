@@ -1,5 +1,7 @@
 # meshlet-optimizer
 
+[![CI](https://github.com/rgb2hsv/meshlet-optimizer/actions/workflows/ci.yml/badge.svg)](https://github.com/rgb2hsv/meshlet-optimizer/actions/workflows/ci.yml)
+
 Command-line tool that turns a triangle mesh (`.ply`) into a meshlet level-of-detail hierarchy saved as a
 `.mlod` file for [meshlet-viewer](../meshlet-viewer). It is the mapping pipeline of wedge's toybox, stripped to
 what the hierarchy build and the export need.
@@ -39,6 +41,10 @@ Delaunay), LBFGSpp and meshoptimizer.
 ```
 git submodule update --init
 ```
+
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) builds four configurations, each with OpenMP: MSVC
+(`vs2022`) and clang-cl (`vs2022-clang`, Visual Studio's ClangCL toolset) on Windows, GCC (`ninja`) and Clang
+(`ninja-clang`) on Linux. Each runs the metasphere test and keeps its executable as an artifact.
 
 **Windows**: Visual Studio 2026 is the default preset; `vs2022` is there for machines without it.
 
@@ -105,3 +111,7 @@ pair of levels cracks.
   pip install pre-commit
   pre-commit install
   ```
+
+## License
+
+MIT, see [LICENSE](LICENSE). The dependencies under `external/` keep their own licenses.

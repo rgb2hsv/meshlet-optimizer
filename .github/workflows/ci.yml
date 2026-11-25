@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows (MSVC 2022)
+            id: windows-msvc
+            os: windows-2022
+            preset: vs2022
+            artifact: build-vs2022/Release/meshlet-optimizer.exe
+          - name: Windows (clang-cl)
+            id: windows-clang-cl
+            os: windows-2022
+            preset: vs2022-clang
+            artifact: |
+              build-vs2022-clang/Release/meshlet-optimizer.exe
+              build-vs2022-clang/Release/libomp.dll
+          - name: Linux (GCC)
+            id: linux-gcc
+            os: ubuntu-24.04
+            preset: ninja
+            cc: gcc
+            cxx: g++
+            packages: ninja-build
+            artifact: build-ninja/meshlet-optimizer
+          - name: Linux (Clang)
+            id: linux-clang
+            os: ubuntu-24.04
+            preset: ninja-clang
+            packages: ninja-build clang libomp-dev
+            artifact: build-ninja-clang/meshlet-optimizer
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Only the test model; the textured cosplay assets are not needed to build or test.
+      - name: Fetch the test model (Git LFS)
+        run: git lfs pull --include "assets/model/metasphere.ply"
+
+      - name: Install packages
+        if: matrix.packages
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          cmake --preset ${{ matrix.preset }} 2>&1 | tee configure.log
+          # A build without OpenMP still works, single-threaded; CI insists on the parallel one.
+          grep -E "OpenMP .*: enabled" configure.log
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
+
+      # Builds the metasphere hierarchy with --check --check-cracks.
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: meshlet-optimizer-${{ matrix.id }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
