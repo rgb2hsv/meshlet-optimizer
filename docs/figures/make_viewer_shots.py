@@ -31,7 +31,7 @@ def main():
         sys.exit(__doc__)
     viewer, metasphere, cosplay = sys.argv[1:]
     # Fixed DAG levels: each region is one meshlet (black outlines), colored by level.
-    for level in (0, 2, 4, 6, 9):
+    for level in range(10):
         shot(viewer, metasphere, "viewer-metasphere-level%d.png" % level, "--lod-level", level,
              width=700, height=700)
     # Automatic LOD selection close up: levels 1-3 drawn side by side, meeting along shared borders.
