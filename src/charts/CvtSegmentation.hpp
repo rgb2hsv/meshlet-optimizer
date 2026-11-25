@@ -120,7 +120,6 @@ class CvtSegmentation
 {
 public:
     using Vec3 = Eigen::Vector3d;
-    using StatusHandler = std::function<bool(const std::string& status, float progress)>;
 
     // Per-seed integrals over its restricted Voronoi cell.
     struct CellIntegrals {
@@ -158,10 +157,7 @@ public:
     int labelVertices(const std::vector<Vec3>& seeds, int minChartVertices, std::vector<int>& vertexLabels) const;
 
     // Full pipeline. Returns the number of charts.
-    int solve(const CvtSegmentationParams& params, std::vector<int>& vertexLabels,
-              const StatusHandler& statusHandler = nullptr);
-
-    const std::vector<Vec3>& seeds() const { return seeds_; }
+    int solve(const CvtSegmentationParams& params, std::vector<int>& vertexLabels);
 
 private:
     void initialize();
@@ -170,8 +166,6 @@ private:
     std::vector<double> triangleAreas_;
     double area_ = 0.0;
     double averageEdge_ = 0.0;
-    std::vector<Vec3> seeds_;
-    std::vector<double> energyHistory_;
 };
 
 }  // namespace mopt

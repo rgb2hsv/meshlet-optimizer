@@ -5,8 +5,8 @@
 
 #include <Eigen/IterativeLinearSolvers>
 #include <Eigen/Sparse>
+#include <Eigen/SparseCholesky>
 #include <algorithm>
-#include <iostream>
 #include <limits>
 #include <list>
 #include <sstream>
@@ -124,30 +124,6 @@ bool FindAndRemoveEdge(const uint32_t& pivotVert, std::vector<Vector2u>& edges, 
     return false;
 }
 
-// BiCGSTAB from guess X; a non-square system is solved through its normal equations.
-std::tuple<double, Eigen::Index> SolveBICGStab(const Eigen::VectorXd& b, const Eigen::SparseMatrix<double>& A,
-                                               Eigen::VectorXd& X, int iterations, double tolerance)
-{
-    Eigen::BiCGSTAB<Eigen::SparseMatrix<double>> solver;
-    solver.setMaxIterations(iterations);
-    solver.setTolerance(tolerance);
-    const size_t N = A.cols();
-    if (N == 0) return {0.0, 0};
-    if (A.rows() != A.cols()) {
-        const auto At = A.transpose();
-        const auto AtA = At * A;
-        const auto Atb = At * b;
-        solver.compute(AtA);
-        X = solver.solveWithGuess(Atb, X);
-    } else {
-        solver.compute(A);
-        X = solver.solveWithGuess(b, X);
-    }
-    double err = solver.error() / N;
-
-    return {err, solver.iterations()};
-}
-
 void Repin(ChartLayout& ctx, bool left = true, bool right = true, bool top = true, bool bottom = true)
 {
     ctx.pinned.clear();
@@ -198,7 +174,6 @@ void Repin(ChartLayout& ctx, bool left = true, bool right = true, bool top = tru
             ctx.pinned.insert(mosaic.vertexes[vMaxIdx].mapId);
         }
     }
-    std::cout << "Pinned " << ctx.pinned.size() << '\n';
 }
 
 Matrix4f FitPlane(const Mesh& mesh, const std::vector<MosaicVertex>& verts, Vector3f* deviations)
@@ -325,11 +300,6 @@ void BuildMosaics(ChartLayout& layout, bool useFaceLabels)
     const int chartCount = layout.chartCount;
     std::vector<Vector3u>& faceArray = layout.mesh.triIndexes;
     const size_t faceCount = faceArray.size();
-    std::cout << "Chart Labels " << chartCount << " Max: "
-              << (layout.vertLabels.empty() ? -1
-                                            : *std::max_element(layout.vertLabels.begin(), layout.vertLabels.end()))
-              << " Mesh " << layout.mesh.vertexLocations.size() << " " << layout.mesh.triIndexes.size() << " "
-              << layout.mesh.quadIndexes.size() << '\n';
 
     if (useFaceLabels) {
         Expects(layout.faceLabels.size() == faceCount, "Face labels {} for {} faces", layout.faceLabels.size(),
@@ -357,7 +327,6 @@ void BuildMosaics(ChartLayout& layout, bool useFaceLabels)
         } else if (l3 >= 0 && l2 >= 0 && l1 < 0) {
             layout.faceLabels[idx] = l3;
         } else {
-            std::cerr << Format("Label Case Not Handled ({}, {}, {})", l1, l2, l3) << '\n';
         }
         idx++;
     }
@@ -575,7 +544,6 @@ void ProjectMosaicsToPlanes(ChartLayout& layout)
             while (next != start) {
                 const auto pos = locator.find(next);
                 if (pos == locator.end()) {
-                    std::cerr << "Warning: " << "Mosaic " << mosaic.id << ": open boundary chain at " << next << '\n';
                     break;
                 }
                 mosaic.edges.emplace_back(pos->first, pos->second);
@@ -586,10 +554,31 @@ void ProjectMosaicsToPlanes(ChartLayout& layout)
         }
     }
     if (extraBoundaryLoops > 0) {
-        std::cout << extraBoundaryLoops << " extra boundary loops (holes or pinches) in dilated mosaics" << '\n';
     }
     RescaleMosaics(layout);
     Repin(layout);
+}
+
+// Least-squares solution of A x = b through the normal equations, which are symmetric positive definite
+// once every mosaic has pinned vertices: a sparse Cholesky factorization, or conjugate gradients from the
+// guess in X (at most `iterations`) if the factorization fails.
+void SolveLeastSquares(const Eigen::SparseMatrix<double>& A, const Eigen::VectorXd& b, Eigen::VectorXd& X,
+                       int iterations)
+{
+    if (A.cols() == 0) return;
+    const Eigen::SparseMatrix<double> AtA = A.transpose() * A;
+    const Eigen::VectorXd Atb = A.transpose() * b;
+    Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> direct(AtA);
+    if (direct.info() == Eigen::Success) {
+        X = direct.solve(Atb);
+    }
+    if (direct.info() != Eigen::Success) {
+        Eigen::ConjugateGradient<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper> cg;
+        cg.setMaxIterations(iterations);
+        cg.setTolerance(1e-12);
+        cg.compute(AtA);
+        X = cg.solveWithGuess(Atb, X);
+    }
 }
 
 void SolveLscm(ChartLayout& layout, int iterations)
@@ -698,13 +687,10 @@ void SolveLscm(ChartLayout& layout, int iterations)
             R += 2;
         }
     }
-    std::cout << "Free " << freeTriples.size() << '\n';
-    std::cout << "Pinned " << pinnedTriples.size() << '\n';
     A.setFromTriplets(freeTriples.begin(), freeTriples.end());
     C.setFromTriplets(pinnedTriples.begin(), pinnedTriples.end());
     b = -C * b;
-    const auto& [err, iters] = SolveBICGStab(b, A, X, iterations, std::numeric_limits<double>::epsilon());
-    std::cout << "LSCM error: " << err << " Iterations: " << iters << '\n';
+    SolveLeastSquares(A, b, X, iterations);
     for (Mosaic& mosaic : layout.mosaics) {
         for (MosaicVertex& mv : mosaic.vertexes) {
             if (!mv.locked) {

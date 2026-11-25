@@ -78,37 +78,13 @@ using SurfaceProjector = std::function<Vector3f(const Vector3f&)>;
 
 // The remeshed level: the welded mesh, the region of each face and vertex, and statistics.
 struct ResampledSurface {
-    // mesh.textureMap holds each triangle corner's UV in the region's packed
-    // layout (3 per triangle, in triangle order).
+    // The welded mesh; mesh.texcoords holds the texture coordinates of every triangle corner when the input had
+    // them.
     Mesh mesh;
     // Region (mosaic index) of each output triangle.
     std::vector<int> faceRegion;
     // Region of each interior output vertex; -1 for kept boundary vertices.
     std::vector<int> vertexRegion;
-    // 1 for vertices created by resampling (as opposed to kept boundary
-    // vertices and the original vertices of regions that kept their triangles).
-    std::vector<char> resampled;
-    int boundaryVertices = 0;
-    int originalInterior = 0;
-    int resampledInterior = 0;
-    // Regions LSCM folded over, and regions simplified by decimation instead
-    // of resampling (folded ones plus triangulation failures).
-    int foldedRegions = 0;
-    int decimatedRegions = 0;
-    // Regions whose lifted triangulation folded over in 3D (then decimated).
-    int liftFoldedRegions = 0;
-    // Regions that kept their original triangles (decimation failed too).
-    int failedRegions = 0;
-    // Directed edges without exactly one opposite partner (0 when the regions
-    // fit back into a closed, consistently oriented mesh).
-    int openEdges = 0;
-    // Triangles repeating another's three vertices (either winding), and
-    // degenerate ones (a repeated vertex, or no area).
-    int duplicateTriangles = 0;
-    int degenerateTriangles = 0;
-    // V - E + F of the reconstituted mesh: unchanged from the input when
-    // the regions fit back without holes, pinches or handles.
-    long long eulerCharacteristic = 0;
     // Normals were recomputed with flipped sign to match the input's.
     bool flipNormals = false;
 };
@@ -144,6 +120,7 @@ public:
         // Kept boundary: local vertex -> boundary index, and cut-mesh ids.
         std::vector<int> boundaryIndex;
         std::vector<uint32_t> boundary;
+        std::vector<int> boundaryLocal;                  // boundary index -> local vertex
         std::vector<std::pair<int, int>> boundaryEdges;  // local vertex pairs
         bool mirrored = false;                           // LSCM mirrored the region
         int originalInterior = 0;
@@ -156,6 +133,10 @@ public:
         std::vector<V2> interiorUv;
         // Interior vertices in 3D: from lift(), or from decimation.
         std::vector<Vector3f> interiorPos;
+        // Texture coordinates of the local vertices (from the cut mesh's corners: a region lies in one UV
+        // island, so each vertex has one), and of the interior vertices. Empty without texture coordinates.
+        std::vector<Vector2f> texcoord;
+        std::vector<Vector2f> interiorTexcoord;
         bool folded = false;  // the UV layout folds over
         bool liftFolded = false;
         bool decimated = false;
@@ -171,8 +152,11 @@ private:
     // it could not be done.
     bool decimate(Region& region) const;
     void keepOriginal(Region& region) const;
+    // Texture coordinates at p, from the closest point on the region's original triangles.
+    Vector2f texcoordAt(const Region& region, const Vector3f& p) const;
     std::vector<Vector3f> positions_;
     std::vector<Vector3f> normals_;
+    bool hasTexcoords_ = false;
     std::vector<Region> regions_;
     RegionResampleParams params_;
 };

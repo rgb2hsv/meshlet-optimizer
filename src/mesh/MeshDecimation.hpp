@@ -79,8 +79,6 @@ static_assert(std::is_trivially_destructible_v<DecimationTriangle>);
 class MeshDecimation
 {
 public:
-    using StatusHandler = std::function<bool(const std::string& status, float progress)>;
-
     // Indexes of input vertices that are never removed or moved: an edge into
     // a locked vertex collapses onto it exactly, so e.g. a patch boundary is
     // kept vertex for vertex. Applies to the following solve() calls.
@@ -97,8 +95,7 @@ public:
     // normals and colors are kept; returning false from the status handler
     // stops early and keeps what has been decimated so far.
     static constexpr float kDefaultDecimationAmount = 0.5f;
-    void solve(Mesh& mesh, float decimationAmount = kDefaultDecimationAmount,
-               const StatusHandler& statusHandler = nullptr);
+    void solve(Mesh& mesh, float decimationAmount = kDefaultDecimationAmount);
 
 protected:
     static constexpr uint32_t kMaxValence = 9;
@@ -163,8 +160,7 @@ protected:
     void removeIfNonNeighbor(uint32_t v, uint32_t n);
     void removeVertex(uint32_t v);
 
-    size_t decimateInternal(Mesh& mesh, size_t validCount, size_t targetCount, const StatusHandler& statusHandler,
-                            bool& cancelled);
+    size_t decimateInternal(Mesh& mesh, size_t validCount, size_t targetCount);
     bool collapseEdge(Mesh& mesh, uint32_t u, uint32_t v);
     void computeEdgeCostAtVertex(const Mesh& mesh, uint32_t v);
     float computeEdgeCollapseCost(const Mesh& mesh, uint32_t u, uint32_t v) const;

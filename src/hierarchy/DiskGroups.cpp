@@ -181,28 +181,19 @@ private:
 };
 }  // namespace
 
-DiskGroupStats mopt::MakeGroupsDisks(const Mesh& mesh, const std::vector<int>& faceRegion, int regionCount,
-                                     const std::vector<std::vector<int>>& regionAdjacency,
-                                     const std::vector<int>& regionWeight, std::vector<int>& group,
-                                     std::vector<char>& absorbed, const DiskGroupParams& params)
+bool mopt::MakeGroupsDisks(const Mesh& mesh, const std::vector<int>& faceRegion, int regionCount,
+                           const std::vector<std::vector<int>>& regionAdjacency, const std::vector<int>& regionWeight,
+                           std::vector<int>& group, std::vector<char>& absorbed, const DiskGroupParams& params,
+                           const std::vector<int>& regionIsland)
 {
-    DiskGroupStats stats;
+    bool changed = false;
     Groups groups(mesh, faceRegion, regionCount, regionAdjacency, regionWeight, group);
-    const auto countGroups = [&](int& total, int& nonDisk) {
-        total = nonDisk = 0;
-        for (int g = 0; g < groups.groupCount(); g++) {
-            if (groups.members(g).empty()) continue;
-            total++;
-            nonDisk += groups.members(g).size() > 1 && !groups.isDiskGroup(g);
-        }
-    };
-    countGroups(stats.groupsBefore, stats.nonDiskBefore);
 
     // Closing: fill the small holes a group surrounds.
     if (params.fillHoles) {
-        for (bool changed = true; changed;) {
-            changed = false;
-            for (int g = 0; g < groups.groupCount() && !changed; g++) {
+        for (bool filled = true; filled;) {
+            filled = false;
+            for (int g = 0; g < groups.groupCount() && !filled; g++) {
                 if (groups.members(g).size() < 2 || groups.isDiskGroup(g)) continue;
                 const std::vector<std::vector<int>> pieces = groups.piecesWithout(g);
                 const double limit = params.maxHoleFraction * groups.faces(groups.members(g));
@@ -212,12 +203,16 @@ DiskGroupStats mopt::MakeGroupsDisks(const Mesh& mesh, const std::vector<int>& f
                         regions.insert(regions.end(), groups.members(h).begin(), groups.members(h).end());
                     }
                     if (groups.faces(regions) > limit) continue;
+                    // A hole in another UV island stays out: groups never span a texture seam.
+                    const int island = regionIsland.empty() ? 0 : regionIsland[groups.members(g).front()];
+                    if (!regionIsland.empty() &&
+                        std::any_of(regions.begin(), regions.end(), [&](int r) { return regionIsland[r] != island; }))
+                        continue;
                     for (int r : regions) {
                         groups.move(r, g);
                         absorbed[r] = 1;
                     }
-                    stats.holesFilled++;
-                    stats.regionsFilled += static_cast<int>(regions.size());
+                    filled = true;
                     changed = true;
                 }
             }
@@ -281,10 +276,9 @@ DiskGroupStats mopt::MakeGroupsDisks(const Mesh& mesh, const std::vector<int>& f
                     groups.move(m, groups.newGroup());
                     absorbed[m] = 0;
                 }
-                stats.regionsEjected++;
+                changed = true;
             }
         }
     }
-    countGroups(stats.groupsAfter, stats.nonDiskAfter);
-    return stats;
+    return changed;
 }

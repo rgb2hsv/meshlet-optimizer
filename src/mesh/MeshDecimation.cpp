@@ -402,8 +402,7 @@ bool MeshDecimation::collapseEdge(Mesh& mesh, uint32_t u, uint32_t v)
     return true;
 }
 
-size_t MeshDecimation::decimateInternal(Mesh& mesh, size_t validCount, size_t targetCount,
-                                        const StatusHandler& statusHandler, bool& cancelled)
+size_t MeshDecimation::decimateInternal(Mesh& mesh, size_t validCount, size_t targetCount)
 {
     const uint32_t vertexCount = static_cast<uint32_t>(vertexes_.size());
     heap_.clear();
@@ -418,13 +417,7 @@ size_t MeshDecimation::decimateInternal(Mesh& mesh, size_t validCount, size_t ta
         }
     }
     size_t removeCount = vertexCount - validCount;
-    size_t iteration = 0;
     while (!heap_.empty() && removeCount < targetCount) {
-        if (statusHandler && (iteration++ & 1023) == 0 &&
-            !statusHandler("Decimate", removeCount / (float)targetCount)) {
-            cancelled = true;
-            break;
-        }
         const uint32_t u = heap_.top()->key;
         heap_.pop();
         if (vertexes_[u].valid && collapseEdge(mesh, u, vertexes_[u].collapse)) {
@@ -454,7 +447,7 @@ void MeshDecimation::initialize(const Mesh& mesh)
     }
 }
 
-void MeshDecimation::solve(Mesh& mesh, float decimationAmount, const StatusHandler& statusHandler)
+void MeshDecimation::solve(Mesh& mesh, float decimationAmount)
 {
     outputIndex_.resize(mesh.vertexLocations.size());
     std::iota(outputIndex_.begin(), outputIndex_.end(), 0u);  // unchanged unless decimated
@@ -463,7 +456,6 @@ void MeshDecimation::solve(Mesh& mesh, float decimationAmount, const StatusHandl
         if (v < locked_.size()) locked_[v] = 1;
     }
     if (decimationAmount <= 0.0f) return;
-    if (mesh.quadIndexes.size() > 0) mesh.convertQuadsToTriangles();
     if (mesh.triIndexes.size() == 0) return;
     initialize(mesh);
     const size_t vertexCount = mesh.vertexLocations.size();
@@ -472,9 +464,8 @@ void MeshDecimation::solve(Mesh& mesh, float decimationAmount, const StatusHandl
     const size_t targetRemoveCount = static_cast<size_t>(std::min(decimationAmount, 1.0f) * vertexCount);
     size_t validCount = vertexCount;
     size_t lastRemoveCount = std::numeric_limits<size_t>::max();
-    bool cancelled = false;
-    while (vertexCount - validCount < targetRemoveCount && !cancelled) {
-        decimateInternal(mesh, validCount, targetRemoveCount, statusHandler, cancelled);
+    while (vertexCount - validCount < targetRemoveCount) {
+        decimateInternal(mesh, validCount, targetRemoveCount);
         validCount = 0;
         for (const DecimationVertex& v : vertexes_) {
             if (v.valid) validCount++;
@@ -508,7 +499,7 @@ void MeshDecimation::solve(Mesh& mesh, float decimationAmount, const StatusHandl
                                            vertexes_[tri.vertex[2]].outputIndex));
     }
     // Per-corner texture coordinates no longer match the faces.
-    mesh.textureMap.clear();
+    mesh.texcoords.clear();
 
     vertexes_.clear();
     triangles_.clear();

@@ -6,7 +6,6 @@
 #include <charts/LabelRegularization.hpp>
 #include <core/Check.hpp>
 #include <core/Types.hpp>
-#include <iostream>
 #include <mesh/Mesh.hpp>
 
 #include <algorithm>
@@ -350,21 +349,6 @@ std::vector<int> LabelGraph::eulerCharacteristics(const std::vector<int>& labels
     return chi;
 }
 
-LabelTopologyStats LabelGraph::topology(const std::vector<int>& labels) const
-{
-    std::vector<int> dense = labels;
-    LabelTopologyStats stats;
-    stats.charts = compact(dense);
-    for (int chi : eulerCharacteristics(dense, stats.charts)) {
-        if (chi == 1) {
-            stats.disks++;
-        } else {
-            stats.nonDisks++;
-        }
-    }
-    return stats;
-}
-
 int LabelGraph::splitCharts(std::vector<int>& labels, int maxRounds, int minVertices,
                             const SplitSelector& needsSplit) const
 {
@@ -491,25 +475,14 @@ int LabelGraph::capTriangles(std::vector<int>& labels, int maxTriangles) const
 
 int LabelGraph::regularize(std::vector<int>& labels, const LabelRegularizationParams& params) const
 {
-    const LabelTopologyStats before = topology(labels);
-    const int dissolved = open(labels, params.openingRings);
-    int moves = params.competitionIterations > 0 ? compete(labels, params) : 0;
-    int splits = 0;
+    open(labels, params.openingRings);
+    if (params.competitionIterations > 0) compete(labels, params);
     if (params.enforceDisks) {
-        splits = splitNonDisks(labels, params);
-        if (splits > 0 && params.competitionIterations > 0) moves += compete(labels, params);
+        const int splits = splitNonDisks(labels, params);
+        if (splits > 0 && params.competitionIterations > 0) compete(labels, params);
     }
     // Last, so no later boundary move can push a chart back over the limit.
-    const int capSplits = capTriangles(labels, params.maxTrianglesPerChart);
+    capTriangles(labels, params.maxTrianglesPerChart);
     const int count = compact(labels);
-    const LabelTopologyStats after = topology(labels);
-    std::cout << "Label regularization: " << before.charts << " charts (" << before.nonDisks << " non-disk) -> "
-              << after.charts << " (" << after.nonDisks << " non-disk); dissolved " << dissolved << ", moved " << moves
-              << ", split " << splits << ", size splits " << capSplits << '\n';
-    if (params.maxTrianglesPerChart > 0) {
-        const std::vector<int> tris = triangleCounts(labels, count);
-        const int largest = tris.empty() ? 0 : *std::max_element(tris.begin(), tris.end());
-        std::cout << "Largest chart: " << largest << " triangles (limit " << params.maxTrianglesPerChart << ")" << '\n';
-    }
     return count;
 }

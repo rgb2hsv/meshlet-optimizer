@@ -61,25 +61,10 @@ struct BorderSimplificationParams {
     std::function<bool(const std::vector<std::pair<uint32_t, Vector3f>>& snaps, uint32_t a, uint32_t b)> trySnap;
 };
 
-// What a border coarsening pass did: chains, vertices before and after, and why collapses were refused.
-struct BorderSimplificationStats {
-    int chains = 0;                // junction-to-junction chains plus closed loops
-    int borderVerticesBefore = 0;  // vertices on any region border
-    int borderVerticesAfter = 0;
-    int collapsed = 0;              // vertices removed
-    int rejectedFold = 0;           // collapses refused: flipped or vanishing triangle
-    int rejectedTopology = 0;       // collapses refused: link condition
-    int rejectedSnap = 0;           // collapses refused by trySnap
-    double borderMeanBefore = 0.0;  // mean border edge length
-    double borderMeanAfter = 0.0;
-    double interiorMean = 0.0;  // mean interior edge length
-};
-
 // faceRegion: one region id (>= 0) per face. On return the collapsed faces
 // are gone and unused vertices dropped (vertexLocations, and vertexNormals /
-// textureMap, when sized
+// texcoords, when sized
 // 3 * faces, keeps the remaining faces' corners), and faceRegion matches.
-BorderSimplificationStats SimplifyRegionBorders(Mesh& mesh, std::vector<int>& faceRegion,
-                                                const BorderSimplificationParams& params = {});
+void SimplifyRegionBorders(Mesh& mesh, std::vector<int>& faceRegion, const BorderSimplificationParams& params = {});
 
 }  // namespace mopt

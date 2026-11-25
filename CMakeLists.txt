@@ -93,4 +93,4 @@ set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT meshlet-optimizer)
 enable_testing()
 add_test(NAME metasphere
          COMMAND meshlet-optimizer ${CMAKE_CURRENT_SOURCE_DIR}/assets/model/metasphere.ply
-                 -o ${CMAKE_CURRENT_BINARY_DIR}/test/metasphere.mlod --check)
+                 -o ${CMAKE_CURRENT_BINARY_DIR}/test/metasphere.mlod --check --check-cracks)

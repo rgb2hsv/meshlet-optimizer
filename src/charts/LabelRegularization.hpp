@@ -54,13 +54,6 @@ struct LabelRegularizationParams {
     int maxTrianglesPerChart = 0;
 };
 
-// How many charts there are and how many of them are topological disks.
-struct LabelTopologyStats {
-    int charts = 0;
-    int disks = 0;
-    int nonDisks = 0;
-};
-
 // Vertex adjacency, triangle areas and normals of a mesh, for cleaning up vertex labels: morphological
 // opening, region competition, merging small charts and splitting non-disk charts.
 class LabelGraph
@@ -88,7 +81,6 @@ public:
     std::vector<int> triangleCounts(const std::vector<int>& labels, int labelCount) const;
     // Euler characteristic V - E + F of each chart's induced subcomplex.
     std::vector<int> eulerCharacteristics(const std::vector<int>& labels, int labelCount) const;
-    LabelTopologyStats topology(const std::vector<int>& labels) const;
 
     // open -> compete -> split -> compete. Returns the final chart count;
     // labels are dense afterwards.

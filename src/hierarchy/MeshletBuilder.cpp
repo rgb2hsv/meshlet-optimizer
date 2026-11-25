@@ -1,21 +1,21 @@
 #include <core/Check.hpp>
+#include <core/TriangleGeometry.hpp>
 #include <core/Types.hpp>
 #include <flattening/ChartFlattening.hpp>
 #include <hierarchy/BorderSimplification.hpp>
 #include <hierarchy/DiskGroups.hpp>
-#include <hierarchy/HierarchyBuilder.hpp>
-#include <hierarchy/HierarchySteps.hpp>
 #include <hierarchy/LevelCracks.hpp>
+#include <hierarchy/MeshletBuilder.hpp>
 #include <hierarchy/RegionHierarchy.hpp>
 #include <hierarchy/RegionSplit.hpp>
 #include <hierarchy/SeamStraightening.hpp>
-#include <iostream>
 #include <mlod/MlodWriter.hpp>
 
 #include <LBFGSB.h>
 #include <Eigen/Core>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <functional>
@@ -28,8 +28,165 @@
 
 using namespace mopt;
 
+namespace mopt
+{
+// Working state of the level being built, between the level stages.
+struct LevelWork {
+    int level = 0;
+    // The previous level's simplified mesh, cut and flattened for this level.
+    std::unique_ptr<ChartLayout> layout;
+    std::unique_ptr<RegionResampler> resampler;
+    ResampledSurface surface;
+};
+}  // namespace mopt
+
 namespace
 {
+
+// Faces joined across their shared edges (both faces of a manifold edge), as a union-find; `joined(f, g)` decides.
+template <class Joined>
+std::vector<int> FaceComponents(const Mesh& mesh, const Joined& joined)
+{
+    const size_t F = mesh.triIndexes.size();
+    std::vector<int> parent(F);
+    for (size_t f = 0; f < F; f++) parent[f] = static_cast<int>(f);
+    const auto find = [&](int f) {
+        while (parent[f] != f) f = parent[f] = parent[parent[f]];
+        return f;
+    };
+    std::unordered_map<uint64_t, int> firstFace;
+    firstFace.reserve(3 * F);
+    for (size_t f = 0; f < F; f++) {
+        const Vector3u t = mesh.triIndexes[f];
+        for (int k = 0; k < 3; k++) {
+            const uint32_t a = std::min(t[k], t[(k + 1) % 3]), b = std::max(t[k], t[(k + 1) % 3]);
+            const auto [it, inserted] = firstFace.emplace((uint64_t(a) << 32) | b, static_cast<int>(f));
+            if (!inserted && joined(it->second, static_cast<int>(f), a, b))
+                parent[find(static_cast<int>(f))] = find(it->second);
+        }
+    }
+    // Components numbered in order of their first face.
+    std::vector<int> id(F, -1), component(F);
+    int count = 0;
+    for (size_t f = 0; f < F; f++) {
+        const int root = find(static_cast<int>(f));
+        if (id[root] < 0) id[root] = count++;
+        component[f] = id[root];
+    }
+    return component;
+}
+
+// Texture coordinates of vertex v in face f.
+Vector2f CornerTexcoord(const Mesh& mesh, int f, uint32_t v)
+{
+    const Vector3u t = mesh.triIndexes[f];
+    return mesh.texcoords[3 * f + (t[0] == v ? 0 : t[1] == v ? 1 : 2)];
+}
+
+// UV island of each face: faces joined across every edge whose ends have the same texture coordinates on both
+// sides. Without texture coordinates the whole mesh is island 0.
+std::vector<int> FaceIslands(const Mesh& mesh)
+{
+    if (!mesh.hasTexcoords()) return std::vector<int>(mesh.triIndexes.size(), 0);
+    return FaceComponents(mesh, [&](int f, int g, uint32_t a, uint32_t b) {
+        return CornerTexcoord(mesh, f, a) == CornerTexcoord(mesh, g, a) &&
+               CornerTexcoord(mesh, f, b) == CornerTexcoord(mesh, g, b);
+    });
+}
+
+// Island of every region (all its faces share one).
+std::vector<int> RegionIslands(const std::vector<int>& faceRegion, const std::vector<int>& faceIsland, int regionCount)
+{
+    std::vector<int> island(regionCount, -1);
+    for (size_t f = 0; f < faceRegion.size(); f++) {
+        int& i = island[faceRegion[f]];
+        Expects(i < 0 || i == faceIsland[f], "region {} spans UV islands {} and {}", faceRegion[f], i, faceIsland[f]);
+        i = faceIsland[f];
+    }
+    return island;
+}
+
+// Only the adjacency between regions of the same island: regions never merge across a texture seam.
+std::vector<std::vector<int>> SameIsland(std::vector<std::vector<int>> adjacency, const std::vector<int>& island)
+{
+    for (size_t r = 0; r < adjacency.size(); r++) {
+        std::erase_if(adjacency[r], [&](int s) { return island[s] != island[r]; });
+    }
+    return adjacency;
+}
+
+// Texture coordinates at p on triangle (a, b, c) with corner texture coordinates (ua, ub, uc), from the
+// closest point; returns the squared distance to it.
+float TexcoordOnTriangle(const Vector3f& p, const Vector3f& a, const Vector3f& b, const Vector3f& c, const Vector2f& ua,
+                         const Vector2f& ub, const Vector2f& uc, Vector2f& uv)
+{
+    Vector3f closest;
+    const float d = DistanceToTriangleSqr(p, a, b, c, &closest);
+    const Vector3f n = (b - a).cross(c - a);
+    const float area = n.squaredNorm();
+    if (!(area > 0.0f)) {
+        uv = ua;
+        return d;
+    }
+    const float wb = (closest - a).cross(c - a).dot(n) / area;
+    const float wc = (b - a).cross(closest - a).dot(n) / area;
+    uv = (1.0f - wb - wc) * ua + wb * ub + wc * uc;
+    return d;
+}
+
+// Every level's vertex positions, to find the vertices a stage moved.
+std::vector<std::vector<Vector3f>> PositionsOf(const std::vector<LodLevel>& levels)
+{
+    std::vector<std::vector<Vector3f>> positions;
+    for (const LodLevel& level : levels) positions.push_back(level.simplified.vertexLocations);
+    return positions;
+}
+
+// After vertices of a level moved within the surface (the triangles unchanged): each moved vertex's texture
+// coordinates, in every region around it, from the closest point on its triangles in that region as they
+// were before the move.
+void ReprojectTexcoords(LodLevel& level, const std::vector<Vector3f>& before)
+{
+    Mesh& m = level.simplified;
+    if (!m.hasTexcoords()) return;
+    const size_t V = std::min(m.vertexLocations.size(), before.size());
+    std::vector<char> moved(V, 0);
+    bool any = false;
+    for (size_t v = 0; v < V; v++) any |= (moved[v] = m.vertexLocations[v] != before[v]) != 0;
+    if (!any) return;
+    std::vector<std::vector<int>> facesOf(V);
+    for (size_t f = 0; f < m.triIndexes.size(); f++) {
+        for (int k = 0; k < 3; k++) {
+            const uint32_t v = m.triIndexes[f][k];
+            if (v < V && moved[v]) facesOf[v].push_back(static_cast<int>(f));
+        }
+    }
+    const std::vector<Vector2f> old = m.texcoords;
+    const std::vector<int>& region = level.simplifiedFaceRegion;
+#pragma omp parallel for schedule(dynamic, 64)
+    for (int v = 0; v < static_cast<int>(V); v++) {
+        if (!moved[v]) continue;
+        const Vector3f p = m.vertexLocations[v];
+        for (int f : facesOf[v]) {
+            float best = std::numeric_limits<float>::max();
+            Vector2f uv = Vector2f::Zero();
+            for (int g : facesOf[v]) {
+                if (region[g] != region[f]) continue;
+                const Vector3u t = m.triIndexes[g];
+                Vector2f candidate;
+                const float d = TexcoordOnTriangle(p, before[t[0]], before[t[1]], before[t[2]], old[3 * g],
+                                                   old[3 * g + 1], old[3 * g + 2], candidate);
+                if (d < best) {
+                    best = d;
+                    uv = candidate;
+                }
+            }
+            const Vector3u t = m.triIndexes[f];
+            m.texcoords[3 * f + (t[0] == static_cast<uint32_t>(v) ? 0 : t[1] == static_cast<uint32_t>(v) ? 1 : 2)] = uv;
+        }
+    }
+}
+
 // A vertex belongs to a region when all its faces do; otherwise it is on a
 // border (-1).
 std::vector<int> VertexRegionsFromFaces(const Mesh& mesh, const std::vector<int>& faceRegion)
@@ -46,9 +203,9 @@ std::vector<int> VertexRegionsFromFaces(const Mesh& mesh, const std::vector<int>
     for (int& r : vertexRegion) r = std::max(r, -1);
     return vertexRegion;
 }
-int TopLevel(const HierarchyBuilder& builder) { return builder.regionHierarchy.levelCount() - 1; }
+int TopLevel(const MeshletBuilder& builder) { return builder.regionHierarchy.levelCount() - 1; }
 
-LevelWork& WorkAt(HierarchyBuilder& builder, const char* step, bool needsResampler)
+LevelWork& WorkAt(MeshletBuilder& builder, const char* step, bool needsResampler)
 {
     LevelWork& work = builder.levelWork();
     Expects(work.layout != nullptr && work.level == TopLevel(builder), "{} needs LevelCut to have run for level {}",
@@ -60,18 +217,88 @@ LevelWork& WorkAt(HierarchyBuilder& builder, const char* step, bool needsResampl
 }
 }  // namespace
 
-int BaseChartsStep::run(HierarchyBuilder& builder, StatusHandler handler)
+namespace mopt
 {
-    builder.mesh.convertQuadsToTriangles();
-    CvtSegmentation cvt(builder.mesh);
-    builder.chartCount = cvt.solve(params_, builder.vertLabels, handler);
-    builder.faceLabels.assign(builder.mesh.triIndexes.size(), -1);
-    MakeOrderedVertexNeighborTable(builder.mesh, builder.vertNbrs);
-    return builder.chartCount;
+MeshletBuilder::MeshletBuilder(const MeshletParams& params) : params_(params) {}
+
+MeshletBuilder::~MeshletBuilder() = default;
+
+LevelWork& MeshletBuilder::levelWork()
+{
+    if (!levelWork_) levelWork_ = std::make_unique<LevelWork>();
+    return *levelWork_;
 }
 
-int BaseLevelStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+void MeshletBuilder::build(const Mesh& input, const StatusHandler& status)
 {
+    mesh = input;
+    pinned.clear();
+    levels.clear();
+    regionHierarchy = RegionHierarchy{};
+    exportReport = ExportReport{};
+    levelWork_.reset();
+    bordersState_ = std::make_shared<LevelBordersState>();
+    // Runs one stage and reports it with its duration, unless it had nothing to do (returned false).
+    const auto stage = [&status](const std::string& name, const auto& run) {
+        const auto start = std::chrono::steady_clock::now();
+        const bool result = run();
+        if (result && status) {
+            status(name, std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+        }
+        return result;
+    };
+
+    stage("Base charts", [&] {
+        buildBaseCharts();
+        buildBaseLevel();
+        if (params_.straightenBaseSeams) straightenBaseSeams();
+        return true;
+    });
+    // Levels until at most stopAtRegions regions are left, or a level is no coarser than the one below it
+    // (every vertex already on a border: e.g. a torus, which disk-shaped regions cannot cover with two).
+    const auto keepGoing = [this] {
+        const bool coarser = levels.size() < 2 || levels.back().simplified.vertexLocations.size() <
+                                                      levels[levels.size() - 2].simplified.vertexLocations.size();
+        return coarser && regionHierarchy.topNodeCount() > params_.stopAtRegions;
+    };
+    for (int pass = 0; pass < params_.maxDepth && keepGoing(); pass++) {
+        const bool built = stage("Level " + std::to_string(pass + 1), [&] {
+            if (!clusterLevel()) return false;
+            cutLevel();
+            flattenLevel();
+            sampleLevel();
+            relaxLevel();
+            triangulateLevel();
+            liftLevel();
+            projectLevel();
+            reconstituteLevel();
+            if (params_.splitAboveFaces > 0) splitLevel();
+            if (params_.simplifyBorders) simplifyLevelBorders();
+            return true;
+        });
+        if (!built) break;
+    }
+    if (params_.simplifyBorders) {
+        stage("Flat triangles", [&] { return fixFlatTriangles(); });
+        if (params_.relaxBorders) stage("Border relaxation", [&] { return relaxBorders(); });
+    }
+    stage("Write " + mlodFile_.string(), [&] { return writeMlod(); });
+}
+}  // namespace mopt
+
+bool MeshletBuilder::buildBaseCharts()
+{
+    MeshletBuilder& builder = *this;
+    CvtSegmentation cvt(builder.mesh);
+    builder.chartCount = cvt.solve(params_.cvt, builder.vertLabels);
+    builder.faceLabels.assign(builder.mesh.triIndexes.size(), -1);
+    MakeOrderedVertexNeighborTable(builder.mesh, builder.vertNbrs);
+    return true;
+}
+
+bool MeshletBuilder::buildBaseLevel()
+{
+    MeshletBuilder& builder = *this;
     int regionCount = 0;
     for (int l : builder.vertLabels) regionCount = std::max(regionCount, l + 1);
     std::vector<int> weights(regionCount, 0);
@@ -135,16 +362,27 @@ int BaseLevelStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
             regionCount = kept;
             builder.chartCount = kept;
         }
-        std::cout << "Base level: " << isolated << " isolated triangles joined their smallest neighbouring builder"
-                  << (kept < static_cast<int>(remap.size())
-                          ? ", " + std::to_string(remap.size() - kept) + " charts emptied"
-                          : std::string())
-                  << '\n';
     }
+    // With texture coordinates no region may span a UV island: the charts are split along the texture seams
+    // (and into edge-connected pieces), so every region of every level stays inside one island.
+    const std::vector<int> faceIsland = FaceIslands(mesh);
+    if (mesh.hasTexcoords()) {
+        faceRegion = FaceComponents(mesh, [&](int f, int g, uint32_t, uint32_t) {
+            return faceRegion[f] == faceRegion[g] && faceIsland[f] == faceIsland[g];
+        });
+        regionCount = 0;
+        for (int r : faceRegion) regionCount = std::max(regionCount, r + 1);
+        weights.assign(regionCount, 0);
+        for (int r : faceRegion) weights[r]++;
+        builder.chartCount = regionCount;
+    }
+    nodeIsland_.assign(1, RegionIslands(faceRegion, faceIsland, regionCount));
     std::vector<int> vertexRegion = VertexRegionsFromFaces(mesh, faceRegion);
-    // Charts are adjacent when an edge has one face in each.
-    const std::vector<std::vector<int>> adjacency = FaceRegionAdjacency(mesh, faceRegion, regionCount);
-    builder.regionHierarchy = InitRegionHierarchy(adjacency, weights, randomSeed_, maxCliqueSize_, absorbSingletons_);
+    // Charts are adjacent when an edge has one face in each (and both lie in the same island).
+    const std::vector<std::vector<int>> adjacency =
+        SameIsland(FaceRegionAdjacency(mesh, faceRegion, regionCount), nodeIsland_[0]);
+    builder.regionHierarchy =
+        InitRegionHierarchy(adjacency, weights, params_.randomSeed, params_.maxCliqueSize, params_.absorbSingletons);
     builder.levels.clear();
     LodLevel base;
     base.level = 0;
@@ -153,15 +391,15 @@ int BaseLevelStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
     base.simplifiedVertexRegion = std::move(vertexRegion);
     builder.levels.push_back(std::move(base));
     builder.levelWork() = LevelWork{};
-    std::cout << "Base level: " << regionCount << " regions" << '\n';
-    return builder.chartCount;
+    return true;
 }
 
-int ClusterLevelStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::clusterLevel()
 {
+    MeshletBuilder& builder = *this;
     RegionHierarchy& tree = builder.regionHierarchy;
     Expects(tree.levelCount() > 0, "ClusterLevel needs BaseLevel to have run");
-    if (!AddRegionHierarchyLevel(tree)) return Pipeline::kStop;
+    if (!AddRegionHierarchyLevel(tree)) return false;
     const int k = TopLevel(builder);
     if (!builder.levels.empty()) {
         // A group with no border at all covers a whole closed surface piece,
@@ -194,57 +432,45 @@ int ClusterLevelStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
             dissolved++;
         }
         if (dissolved > 0) {
-            const std::vector<std::vector<int>> adjacency =
-                FaceRegionAdjacency(prev.simplified, prev.simplifiedFaceRegion, regionCount);
+            const std::vector<std::vector<int>> adjacency = SameIsland(
+                FaceRegionAdjacency(prev.simplified, prev.simplifiedFaceRegion, regionCount), nodeIsland_[k - 1]);
             RegroupTopLevel(tree, group, absorbed, adjacency);
-            std::cout << "Cluster level " << k << ": " << dissolved
-                      << " regions taken back out of groups that closed a surface" << '\n';
             if (tree.nodeCount(k) == regionCount) {
                 RemoveTopLevel(tree, adjacency);
-                std::cout << "Cluster level " << k << " merges nothing without closing a surface: levels end at "
-                          << k - 1 << '\n';
-                return Pipeline::kStop;
+                return false;
             }
         }
     }
-    if (keepDisks_ && !builder.levels.empty()) {
+    if (params_.keepDisks && !builder.levels.empty()) {
         // Groups of the level below's (remeshed) regions, made disk-shaped:
         // small holes filled, then members shed (DiskGroups.hpp).
         const LodLevel& prev = builder.levels.back();
         const int regionCount = tree.nodeCount(k - 1);
-        const std::vector<std::vector<int>> adjacency =
-            FaceRegionAdjacency(prev.simplified, prev.simplifiedFaceRegion, regionCount);
+        const std::vector<std::vector<int>> adjacency = SameIsland(
+            FaceRegionAdjacency(prev.simplified, prev.simplifiedFaceRegion, regionCount), nodeIsland_[k - 1]);
         std::vector<int> group = tree.parent[k - 1];
         std::vector<char> absorbed = tree.absorbed[k - 1];
         DiskGroupParams params;
-        params.maxHoleFraction = maxHoleFraction_;
-        const DiskGroupStats stats = MakeGroupsDisks(prev.simplified, prev.simplifiedFaceRegion, regionCount, adjacency,
-                                                     tree.weight[k - 1], group, absorbed, params);
-        if (stats.holesFilled > 0 || stats.regionsEjected > 0) RegroupTopLevel(tree, group, absorbed, adjacency);
-        std::cout << "Cluster level " << k << " disks: " << stats.nonDiskBefore << " of " << stats.groupsBefore
-                  << " groups were not disks; filled " << stats.holesFilled << " holes (" << stats.regionsFilled
-                  << " regions), shed " << stats.regionsEjected << " regions; " << stats.nonDiskAfter << " of "
-                  << tree.nodeCount(k) << " groups still not disks" << '\n';
+        params.maxHoleFraction = params_.maxHoleFraction;
+        const bool changed = MakeGroupsDisks(prev.simplified, prev.simplifiedFaceRegion, regionCount, adjacency,
+                                             tree.weight[k - 1], group, absorbed, params, nodeIsland_[k - 1]);
+        if (changed) RegroupTopLevel(tree, group, absorbed, adjacency);
     }
-    std::vector<int> clique(tree.nodeCount(k), 0);
-    int absorbed = 0;
+    // Each new node lies in the island of its members.
+    nodeIsland_.resize(k + 1);
+    nodeIsland_[k].assign(tree.nodeCount(k), -1);
     for (int node = 0; node < tree.nodeCount(k - 1); node++) {
-        if (tree.absorbed[k - 1][node]) {
-            absorbed++;
-        } else {
-            clique[tree.parent[k - 1][node]]++;
-        }
+        int& island = nodeIsland_[k][tree.parent[k - 1][node]];
+        Expects(island < 0 || island == nodeIsland_[k - 1][node], "level {} node {} spans UV islands", k,
+                tree.parent[k - 1][node]);
+        island = nodeIsland_[k - 1][node];
     }
-    std::array<int, 5> bySize{};
-    for (int s : clique) bySize[std::min(s, 4)]++;
-    std::cout << "Cluster level " << k << ": " << tree.nodeCount(k) << " nodes (cliques of 4/3/2/1: " << bySize[4]
-              << "/" << bySize[3] << "/" << bySize[2] << "/" << bySize[1] << ", absorbed singles: " << absorbed << ")"
-              << '\n';
-    return builder.chartCount;
+    return true;
 }
 
-int LevelCutStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::cutLevel()
 {
+    MeshletBuilder& builder = *this;
     const RegionHierarchy& tree = builder.regionHierarchy;
     const int k = TopLevel(builder);
     Expects(k >= 1 && static_cast<int>(builder.levels.size()) == k,
@@ -310,13 +536,12 @@ int LevelCutStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
         Expects(level.faceLabels[f] >= 0, "Level {} face {} has no group", k, f);
     }
     level.chartCount = tree.nodeCount(k);
-    std::cout << "Level " << k << " cut: " << level.chartCount << " groups, " << mesh.vertexLocations.size()
-              << " vertices, " << mesh.triIndexes.size() << " faces" << '\n';
-    return builder.chartCount;
+    return true;
 }
 
-int LevelFlattenStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::flattenLevel()
 {
+    MeshletBuilder& builder = *this;
     LevelWork& work = WorkAt(builder, "LevelLSCM", false);
     ChartLayout& level = *work.layout;
     BuildMosaics(level, true);
@@ -327,22 +552,20 @@ int LevelFlattenStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
         ownFaces[i] = level.mosaics[i].faces.size();
         ownVertices[i] = level.mosaics[i].vertexes.size();
     }
-    if (paddingRings_ > 0) {
+    if (params_.lscmPaddingRings > 0) {
         if (level.vertNbrs.size() != level.mesh.vertexLocations.size()) {
             MakeOrderedVertexNeighborTable(level.mesh, level.vertNbrs);
         }
-        DilateMosaics(level, paddingRings_);
+        DilateMosaics(level, params_.lscmPaddingRings);
         level.totalVertexCount = level.textureToMeshMap.size();
     }
     BuildMosaicNeighborTables(level);
     ProjectMosaicsToPlanes(level);
-    SolveLscm(level, iterations_);
-    if (paddingRings_ > 0) {
+    SolveLscm(level, params_.lscmIterations);
+    if (params_.lscmPaddingRings > 0) {
         // Drop the padding: each region keeps exactly its own triangles.
-        size_t paddingFaces = 0;
         for (size_t i = 0; i < level.mosaics.size(); i++) {
             Mosaic& mosaic = level.mosaics[i];
-            paddingFaces += mosaic.faces.size() - ownFaces[i];
             for (size_t v = ownVertices[i]; v < mosaic.vertexes.size(); v++) {
                 mosaic.vertexMap.erase(mosaic.vertexes[v].mapId);
             }
@@ -351,72 +574,54 @@ int LevelFlattenStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
         }
         // UV area back in proportion to each region's own 3D area.
         RescaleMosaics(level);
-        std::cout << "Level " << work.level << " LSCM padded by " << paddingRings_ << " ring(s): " << paddingFaces
-                  << " padding faces dropped" << '\n';
     }
-    return builder.chartCount;
+    return true;
 }
 
-int LevelBlueNoiseStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::sampleLevel()
 {
+    MeshletBuilder& builder = *this;
     LevelWork& work = WorkAt(builder, "LevelBlueNoise", false);
-    work.resampler = std::make_unique<RegionResampler>(work.layout->mesh, work.layout->mosaics, params_);
+    work.resampler = std::make_unique<RegionResampler>(work.layout->mesh, work.layout->mosaics, params_.resample);
     work.resampler->sampleBlueNoise();
-    std::cout << "Level " << work.level << " blue noise: " << work.resampler->interiorPointCount()
-              << " interior points in " << work.resampler->regionCount() << " regions" << '\n';
-    return builder.chartCount;
+    return true;
 }
 
-int LevelCvtStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::relaxLevel()
 {
+    MeshletBuilder& builder = *this;
     WorkAt(builder, "LevelCVT", true).resampler->relaxCvt();
-    return builder.chartCount;
+    return true;
 }
 
-int LevelTriangulateStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::triangulateLevel()
 {
+    MeshletBuilder& builder = *this;
     WorkAt(builder, "LevelTriangulate", true).resampler->triangulate();
-    return builder.chartCount;
+    return true;
 }
 
-int LevelLiftStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::liftLevel()
 {
+    MeshletBuilder& builder = *this;
     WorkAt(builder, "LevelLift", true).resampler->lift();
-    return builder.chartCount;
+    return true;
 }
 
-int LevelProjectStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::projectLevel()
 {
+    MeshletBuilder& builder = *this;
     WorkAt(builder, "LevelProject", true).resampler->project(builder.projectToSurface);
-    return builder.chartCount;
+    return true;
 }
 
 namespace
 {
-// V - E + F of each region's faces as a surface of its own (1 for a disk).
-std::vector<long long> RegionEuler(const Mesh& mesh, const std::vector<int>& faceRegion, int regionCount)
-{
-    std::vector<long long> chi(regionCount, 0);
-    std::vector<std::unordered_set<uint64_t>> vertexSet(regionCount), edgeSet(regionCount);
-    for (size_t f = 0; f < mesh.triIndexes.size(); f++) {
-        const int r = faceRegion[f];
-        const Vector3u t = mesh.triIndexes[f];
-        chi[r]++;
-        for (int k = 0; k < 3; k++) {
-            vertexSet[r].insert(t[k]);
-            const uint32_t a = std::min(t[k], t[(k + 1) % 3]), b = std::max(t[k], t[(k + 1) % 3]);
-            edgeSet[r].insert((uint64_t(a) << 32) | b);
-        }
-    }
-    for (int r = 0; r < regionCount; r++) {
-        chi[r] += static_cast<long long>(vertexSet[r].size()) - static_cast<long long>(edgeSet[r].size());
-    }
-    return chi;
-}
 }  // namespace
 
-int LevelReconstituteStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::reconstituteLevel()
 {
+    MeshletBuilder& builder = *this;
     LevelWork& work = WorkAt(builder, "LevelReconstitute", true);
     work.surface = work.resampler->reconstitute();
     // Region index -> group (mosaic id).
@@ -431,87 +636,53 @@ int LevelReconstituteStep::run(HierarchyBuilder& builder, StatusHandler /*handle
     result.simplified = std::move(work.surface.mesh);
     result.simplifiedFaceRegion = std::move(work.surface.faceRegion);
     result.simplifiedVertexRegion = std::move(work.surface.vertexRegion);
-    std::cout << "Level " << result.level << ": " << result.simplified.vertexLocations.size() << " vertices, "
-              << result.simplified.triIndexes.size() << " faces" << '\n';
     builder.levels.push_back(std::move(result));
     work = LevelWork{};
-    return builder.chartCount;
+    return true;
 }
 
-int LevelSplitStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::splitLevel()
 {
+    MeshletBuilder& builder = *this;
     RegionHierarchy& tree = builder.regionHierarchy;
     const int k = TopLevel(builder);
     Expects(k >= 1 && static_cast<int>(builder.levels.size()) == k + 1,
             "LevelSplit needs LevelReconstitute to have stored level {}", k);
     LodLevel& level = builder.levels.back();
     const int before = tree.topNodeCount();
-    const std::vector<long long> chiBefore = RegionEuler(level.simplified, level.simplifiedFaceRegion, before);
     const size_t facesBefore = level.simplified.triIndexes.size();
     const std::vector<RegionSplit> splits =
-        SplitLargeRegions(level.simplified, level.simplifiedFaceRegion, before, maxFaces_);
-    if (splits.empty()) return builder.chartCount;
+        SplitLargeRegions(level.simplified, level.simplifiedFaceRegion, before, params_.splitAboveFaces);
+    if (splits.empty()) return true;
     Expects(level.simplified.triIndexes.size() == facesBefore, "LevelSplit changed the triangle count");
     for (const RegionSplit& split : splits) {
         const int id = SplitTopNode(tree, split.region,
                                     split.movedFaces / static_cast<double>(split.keptFaces + split.movedFaces));
         Expects(id == split.newRegion, "LevelSplit: node {} for region {}", id, split.newRegion);
+        nodeIsland_[k].resize(id + 1, -1);
+        nodeIsland_[k][id] = nodeIsland_[k][split.region];
     }
     const int regionCount = tree.topNodeCount();
     // The new borders become border vertices (-1) like the others, so the
     // next level keeps them fixed.
     Mesh& mesh = level.simplified;
     level.simplifiedVertexRegion = VertexRegionsFromFaces(mesh, level.simplifiedFaceRegion);
-    tree.topAdjacency = FaceRegionAdjacency(mesh, level.simplifiedFaceRegion, regionCount);
-    // Topology of the halves: a disk should split into two disks.
-    const std::vector<long long> chiAfter = RegionEuler(mesh, level.simplifiedFaceRegion, regionCount);
-    int disks = 0, diskToDisks = 0;
-    std::map<std::string, int> other;
-    for (const RegionSplit& split : splits) {
-        const long long c = chiBefore[split.region], a = chiAfter[split.region], b = chiAfter[split.newRegion];
-        if (c == 1) {
-            disks++;
-            if (a == 1 && b == 1) {
-                diskToDisks++;
-                continue;
-            }
-        }
-        other[std::to_string(c) + " -> " + std::to_string(a) + " + " + std::to_string(b)]++;
-    }
-    std::string otherText;
-    for (const auto& [what, count] : other) otherText += " [" + what + "] x" + std::to_string(count);
-    // Balance: the smaller half's share of the region's triangles.
-    double worstShare = 0.5, shareSum = 0.0;
-    for (const RegionSplit& split : splits) {
-        const double share =
-            std::min(split.keptFaces, split.movedFaces) / static_cast<double>(split.keptFaces + split.movedFaces);
-        worstShare = std::min(worstShare, share);
-        shareSum += share;
-    }
-    std::cout << "Level " << k << " split " << splits.size() << " regions over " << maxFaces_ / 2
-              << " faces in two: " << before << " -> " << regionCount << " regions, " << mesh.triIndexes.size()
-              << " triangles (unchanged); smaller half " << 100.0 * shareSum / splits.size() << "% on average, "
-              << 100.0 * worstShare << "% at worst; " << diskToDisks << " of " << disks
-              << " disks became two disks; V-E+F other splits (region -> halves):"
-              << (otherText.empty() ? std::string(" none") : otherText) << '\n';
-    return builder.chartCount;
+    tree.topAdjacency = SameIsland(FaceRegionAdjacency(mesh, level.simplifiedFaceRegion, regionCount), nodeIsland_[k]);
+    return true;
 }
 
-int BaseSeamsStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::straightenBaseSeams()
 {
+    MeshletBuilder& builder = *this;
     RegionHierarchy& tree = builder.regionHierarchy;
     Expects(tree.levelCount() == 1 && builder.levels.size() == 1, "BaseSeams needs BaseLevel to have run (alone)");
     LodLevel& base = builder.levels.front();
-    const SeamStraighteningStats stats = StraightenRegionSeams(base.simplified, base.simplifiedFaceRegion);
+    StraightenRegionSeams(base.simplified, base.simplifiedFaceRegion, {}, nodeIsland_[0]);
     const Mesh& mesh = base.simplified;
     base.simplifiedVertexRegion = VertexRegionsFromFaces(mesh, base.simplifiedFaceRegion);
-    tree.topAdjacency = FaceRegionAdjacency(mesh, base.simplifiedFaceRegion, tree.topNodeCount());
-    std::cout << "Base seams: " << stats.straightened << " of " << stats.chains << " border chains straightened ("
-              << stats.rejected << " rejected, " << stats.loops << " closed loops kept), " << stats.facesMoved
-              << " faces moved; border length " << stats.lengthBefore << " -> " << stats.lengthAfter
-              << ", mean distance from region bisectors " << stats.bisectorDistanceBefore << " -> "
-              << stats.bisectorDistanceAfter << " edge lengths" << '\n';
-    return builder.chartCount;
+    tree.topAdjacency =
+        SameIsland(FaceRegionAdjacency(mesh, base.simplifiedFaceRegion, tree.topNodeCount()), nodeIsland_[0]);
+    return true;
 }
 
 // The finished levels' border vertices by position, and the removed
@@ -566,7 +737,7 @@ void RegisterLevel(LevelBordersState& st, const LodLevel& level)
 // Move the copies of the border vertex at `from` on levels below `below` to
 // `to`, and the vertices attached to edges ending there along with them.
 // Every change is recorded in st.undo.
-void MoveVertex(LevelBordersState& st, HierarchyBuilder& builder, const BorderKey& from, const BorderKey& to, int below)
+void MoveVertex(LevelBordersState& st, MeshletBuilder& builder, const BorderKey& from, const BorderKey& to, int below)
 {
     if (from == to) return;
     for (int j = 0; j < below && j < static_cast<int>(st.levels.size()); j++) {
@@ -626,7 +797,7 @@ void MoveVertex(LevelBordersState& st, HierarchyBuilder& builder, const BorderKe
 }
 
 // Did a moved vertex flip or turn one of its triangles too far?
-bool FoldsAny(const LevelBordersState& st, const HierarchyBuilder& builder, float cosMax)
+bool FoldsAny(const LevelBordersState& st, const MeshletBuilder& builder, float cosMax)
 {
     for (const auto& [j, v] : st.moved) {
         const Mesh& m = builder.levels[j].simplified;
@@ -642,19 +813,12 @@ bool FoldsAny(const LevelBordersState& st, const HierarchyBuilder& builder, floa
 }
 }  // namespace
 
-LevelBordersStep::LevelBordersStep(const BorderSimplificationParams& params, bool snapFinerLevels,
-                                   std::shared_ptr<LevelBordersState> state)
-    : params_(params),
-      snapFinerLevels_(snapFinerLevels),
-      state_(state ? std::move(state) : std::make_shared<LevelBordersState>())
+bool MeshletBuilder::simplifyLevelBorders()
 {
-}
-
-int LevelBordersStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
-{
+    MeshletBuilder& builder = *this;
     const int k = static_cast<int>(builder.levels.size()) - 1;
     Expects(k >= 1, "LevelBorders needs a level above the base");
-    LevelBordersState& st = *state_;
+    LevelBordersState& st = *bordersState_;
     if (k == 1) {
         st = LevelBordersState{};
         RegisterLevel(st, builder.levels[0]);
@@ -662,10 +826,9 @@ int LevelBordersStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
     Expects(static_cast<int>(st.levels.size()) == k, "LevelBorders: level {} out of step", k);
     LodLevel& level = builder.levels[k];
     Mesh& mesh = level.simplified;
-    const float cosMax = static_cast<float>(std::cos(params_.maxNormalChangeDegrees * M_PI / 180.0));
-    int snaps = 0;
-    BorderSimplificationParams params = params_;
-    if (snapFinerLevels_) {
+    const float cosMax = static_cast<float>(std::cos(params_.borders.maxNormalChangeDegrees * M_PI / 180.0));
+    BorderSimplificationParams params = params_.borders;
+    if (params_.snapFinerLevels) {
         params.trySnap = [&](const std::vector<std::pair<uint32_t, Vector3f>>& under, uint32_t ia, uint32_t ib) {
             // under[0] is the vertex being removed now; the others were
             // removed before, under the two chain edges that now merge.
@@ -715,24 +878,17 @@ int LevelBordersStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
             st.attachments.push_back(std::move(att));
             st.byEnd.insert({a, id});
             st.byEnd.insert({b, id});
-            snaps += static_cast<int>(st.moved.size());
             st.undo.clear();
             return true;
         };
     }
-    const BorderSimplificationStats s = SimplifyRegionBorders(mesh, level.simplifiedFaceRegion, params);
+    const std::vector<std::vector<Vector3f>> before = PositionsOf(builder.levels);
+    SimplifyRegionBorders(mesh, level.simplifiedFaceRegion, params);
+    for (int j = 0; j < k; j++) ReprojectTexcoords(builder.levels[j], before[j]);
     level.simplifiedVertexRegion = VertexRegionsFromFaces(mesh, level.simplifiedFaceRegion);
     RegisterLevel(st, level);
 
-    const double removed = s.borderVerticesBefore
-                               ? 100.0 * (s.borderVerticesBefore - s.borderVerticesAfter) / s.borderVerticesBefore
-                               : 0.0;
-    std::cout << "Level " << k << " borders: " << s.borderVerticesBefore << " -> " << s.borderVerticesAfter
-              << " border vertices (" << removed << "% removed), border edge " << s.borderMeanBefore << " -> "
-              << s.borderMeanAfter << ", interior edge " << s.interiorMean << "; " << s.rejectedFold << " fold, "
-              << s.rejectedTopology << " topology and " << s.rejectedSnap << " finer-fold rejections; " << snaps
-              << " vertex moves on finer levels" << '\n';
-    return builder.chartCount;
+    return true;
 }
 
 namespace
@@ -783,16 +939,6 @@ LevelBorder BorderOfLevel(const LodLevel& level)
     return out;
 }
 
-double SpreadOf(const std::vector<double>& lengths)
-{
-    double sum = 0.0, sq = 0.0;
-    for (double l : lengths) {
-        sum += l;
-        sq += l * l;
-    }
-    const double n = static_cast<double>(std::max<size_t>(1, lengths.size())), mean = sum / n;
-    return mean > 0.0 ? std::sqrt(std::max(0.0, sq / n - mean * mean)) / mean : 0.0;
-}
 }  // namespace
 
 namespace
@@ -816,14 +962,9 @@ double SmallestOf(const V3d& a, const V3d& b, const V3d& c)
     return std::min({t[0], t[1], t[2]});
 }
 
-// What FixFlatTrianglesStep did on one level.
-struct FlatFixStats {
-    int found = 0, flipped = 0, split = 0, onBorder = 0, left = 0;
-};
-
 // Fix the flat caps of one level; returns the faces changed or added.
 std::vector<int> FixFlatTriangles(LodLevel& level, double minAngle, double cosMax,
-                                  const std::function<Vector3f(const Vector3f&)>& project, FlatFixStats& stats)
+                                  const std::function<Vector3f(const Vector3f&)>& project)
 {
     Mesh& m = level.simplified;
     std::vector<int>& region = level.simplifiedFaceRegion;
@@ -866,11 +1007,9 @@ std::vector<int> FixFlatTriangles(LodLevel& level, double minAngle, double cosMa
             auto t = tri(f);
             const auto ang = AnglesOf(P(t[0]), P(t[1]), P(t[2]));
             if (std::min({ang[0], ang[1], ang[2]}) >= minAngle) continue;
-            if (pass == 0) stats.found++;
             // The cap's obtuse corner m, its long edge p-q: rotate f to (p, m, q).
             const int k = static_cast<int>(std::max_element(ang.begin(), ang.end()) - ang.begin());
             if (ang[k] < 120.0) {
-                stats.left++;  // a needle (two corners close together), not a cap
                 continue;
             }
             const uint32_t mv = t[k], p = t[(k + 2) % 3], q = t[(k + 1) % 3];
@@ -878,13 +1017,11 @@ std::vector<int> FixFlatTriangles(LodLevel& level, double minAngle, double cosMa
             const uint64_t key = (uint64_t(std::min(p, q)) << 32) | std::max(p, q);
             const auto& across = edgeFaces[key];
             if (across.size() != 2) {
-                stats.left++;
                 continue;
             }
             const int g = across[0] == f ? across[1] : across[0];
             if (touched[g]) continue;
             if (region[g] != region[f]) {
-                stats.onBorder++;  // the long edge is a region border: leave it
                 continue;
             }
             const auto gt = tri(g);
@@ -898,12 +1035,26 @@ std::vector<int> FixFlatTriangles(LodLevel& level, double minAngle, double cosMa
             if (!edgeFaces.count(mw)) {
                 const std::array<std::array<uint32_t, 3>, 4> flip{{{mv, q, w}, {w, p, mv}, {}, {}}};
                 if (good(flip, 2, reference, {}, minAngle)) {
+                    if (m.hasTexcoords()) {
+                        // The pair lies in one region, so each of its vertices has one texture coordinate.
+                        const auto uvOf = [&](uint32_t v) {
+                            for (int h : {f, g}) {
+                                const auto ht = tri(h);
+                                for (int c = 0; c < 3; c++) {
+                                    if (ht[c] == v) return m.texcoords[3 * h + c];
+                                }
+                            }
+                            return Vector2f(Vector2f::Zero());
+                        };
+                        const Vector2f um = uvOf(mv), uq = uvOf(q), uw = uvOf(w), up = uvOf(p);
+                        m.texcoords[3 * f] = um, m.texcoords[3 * f + 1] = uq, m.texcoords[3 * f + 2] = uw;
+                        m.texcoords[3 * g] = uw, m.texcoords[3 * g + 1] = up, m.texcoords[3 * g + 2] = um;
+                    }
                     m.triIndexes[f] = Vector3u(mv, q, w);
                     m.triIndexes[g] = Vector3u(w, p, mv);
                     touched[f] = touched[g] = 1;
                     changed.insert(f);
                     changed.insert(g);
-                    stats.flipped++;
                     any = true;
                     continue;
                 }
@@ -916,10 +1067,35 @@ std::vector<int> FixFlatTriangles(LodLevel& level, double minAngle, double cosMa
             const std::array<std::array<uint32_t, 3>, 4> fan{
                 {{p, mv, UINT32_MAX}, {mv, q, UINT32_MAX}, {q, w, UINT32_MAX}, {w, p, UINT32_MAX}}};
             if (!good(fan, 4, reference, {ToV3d(s)}, minAngle)) {
-                stats.left++;
                 continue;
             }
             const uint32_t sv = static_cast<uint32_t>(m.vertexLocations.size());
+            if (m.hasTexcoords()) {
+                // The new vertex's texture coordinates from the closest point on the pair; the corners keep
+                // their own.
+                const auto uvOf = [&](uint32_t v) {
+                    for (int h : {f, g}) {
+                        const auto ht = tri(h);
+                        for (int c = 0; c < 3; c++) {
+                            if (ht[c] == v) return m.texcoords[3 * h + c];
+                        }
+                    }
+                    return Vector2f(Vector2f::Zero());
+                };
+                Vector2f us, ug;
+                const auto ft = tri(f);
+                const float df =
+                    TexcoordOnTriangle(s, m.vertexLocations[ft[0]], m.vertexLocations[ft[1]], m.vertexLocations[ft[2]],
+                                       m.texcoords[3 * f], m.texcoords[3 * f + 1], m.texcoords[3 * f + 2], us);
+                const float dg =
+                    TexcoordOnTriangle(s, m.vertexLocations[gt[0]], m.vertexLocations[gt[1]], m.vertexLocations[gt[2]],
+                                       m.texcoords[3 * g], m.texcoords[3 * g + 1], m.texcoords[3 * g + 2], ug);
+                if (dg < df) us = ug;
+                const Vector2f up = uvOf(p), um = uvOf(mv), uq = uvOf(q), uw = uvOf(w);
+                m.texcoords[3 * f] = up, m.texcoords[3 * f + 1] = um, m.texcoords[3 * f + 2] = us;
+                m.texcoords[3 * g] = um, m.texcoords[3 * g + 1] = uq, m.texcoords[3 * g + 2] = us;
+                for (const Vector2f& uv : {uq, uw, us, uw, up, us}) m.texcoords.push_back(uv);
+            }
             m.vertexLocations.push_back(s);
             if (m.vertexNormals.size() == sv) m.vertexNormals.push_back(m.vertexNormals[w]);
             level.simplifiedVertexRegion.push_back(region[f]);
@@ -935,31 +1111,26 @@ std::vector<int> FixFlatTriangles(LodLevel& level, double minAngle, double cosMa
             for (int c : {f, g, static_cast<int>(m.triIndexes.size()) - 2, static_cast<int>(m.triIndexes.size()) - 1}) {
                 changed.insert(c);
             }
-            stats.split++;
             any = true;
         }
-    }
-    if (!changed.empty()) {
-        m.textureMap.clear();  // per-corner UVs no longer match
     }
     return std::vector<int>(changed.begin(), changed.end());
 }
 }  // namespace
 
-int FixFlatTrianglesStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::fixFlatTriangles()
 {
-    const double cosMax = std::cos(maxNormalChangeDegrees_ * M_PI / 180.0);
-    const bool withState = state_ && state_->levels.size() == builder.levels.size();
-    FlatFixStats total;
+    MeshletBuilder& builder = *this;
+    const double cosMax = std::cos(params_.flatMaxNormalChangeDegrees * M_PI / 180.0);
+    const bool withState = bordersState_ && bordersState_->levels.size() == builder.levels.size();
     for (size_t j = 0; j < builder.levels.size(); j++) {
         LodLevel& level = builder.levels[j];
-        FlatFixStats stats;
         const std::vector<int> changed =
-            FixFlatTriangles(level, minAngleDegrees_, cosMax, builder.projectToSurface, stats);
+            FixFlatTriangles(level, params_.flatMinAngleDegrees, cosMax, builder.projectToSurface);
         if (withState && !changed.empty()) {
             // Changed and new faces take their own normals as reference; the
             // face lists are rebuilt.
-            LevelBordersState::Level& l = state_->levels[j];
+            LevelBordersState::Level& l = bordersState_->levels[j];
             const Mesh& m = level.simplified;
             l.normal0.resize(m.triIndexes.size());
             for (int f : changed) {
@@ -973,29 +1144,17 @@ int FixFlatTrianglesStep::run(HierarchyBuilder& builder, StatusHandler /*handler
                 for (uint32_t v : {t.x(), t.y(), t.z()}) l.facesOf[v].push_back(static_cast<int>(f));
             }
         }
-        if (stats.found > 0) {
-            std::cout << "Level " << j << " flat triangles: " << stats.found << " found, " << stats.flipped
-                      << " flipped, " << stats.split << " split with a new vertex, " << stats.onBorder
-                      << " left (long edge on a border), " << stats.left << " left (no good fix or not a cap)" << '\n';
-        }
-        total.found += stats.found;
-        total.flipped += stats.flipped;
-        total.split += stats.split;
-        total.onBorder += stats.onBorder;
-        total.left += stats.left;
     }
-    std::cout << "Flat triangles: " << total.found << " found, " << total.flipped << " flipped, " << total.split
-              << " split, " << total.onBorder + total.left << " left" << '\n';
-    return builder.chartCount;
+    return true;
 }
 
-int BorderLloydStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::relaxBorders()
 {
-    LevelBordersState& st = *state_;
+    MeshletBuilder& builder = *this;
+    LevelBordersState& st = *bordersState_;
     const int levels = static_cast<int>(builder.levels.size());
     if (levels < 2 || static_cast<int>(st.levels.size()) != levels) {
-        std::cout << "Border relaxation: skipped (levels not built with border state)" << '\n';
-        return builder.chartCount;
+        return true;
     }
     using Key = LevelBordersState::Key;
     // Every border vertex (by position) on every level is one identity.
@@ -1186,7 +1345,7 @@ int BorderLloydStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
     sliderOf.resize(N, -1);
     drivenBy.resize(N, -1);
     const int nv = static_cast<int>(start.size());
-    if (nv == 0) return builder.chartCount;
+    if (nv == 0) return true;
     x0 = Eigen::Map<Eigen::VectorXd>(start.data(), nv);
     lb = Eigen::Map<Eigen::VectorXd>(lo.data(), nv);
     ub = Eigen::Map<Eigen::VectorXd>(hi.data(), nv);
@@ -1255,56 +1414,82 @@ int BorderLloydStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
             tris.push_back(tri);
         }
     }
-    // CVT energy of a triangle: each corner's share (the quad from it to the
-    // edge midpoints and the centroid) integrated against |x - corner|^2.
-    const auto halfQuad = [](const V3d& q, const V3d& b, const V3d& c) {
-        // Integral of |x - q|^2 over triangle (q, b, c): area / 6 (|b'|^2 + |c'|^2 + b'.c').
+    // The CVT energy of a triangle: each corner's share (the quad between it, its edge midpoints and the
+    // centroid, split into two triangles) integrated against |x - corner|^2. halfQuadGrad gives the integral
+    // of |x - q|^2 over the triangle (q, b, c), area / 6 (|b - q|^2 + |c - q|^2 + (b - q).(c - q)), and its
+    // gradient with respect to q, b and c.
+    const auto halfQuadGrad = [](const V3d& q, const V3d& b, const V3d& c, V3d& dq, V3d& db, V3d& dc) {
         const V3d bq = b - q, cq = c - q;
-        const double area = 0.5 * bq.cross(cq).norm();
-        return area / 6.0 * (bq.squaredNorm() + cq.squaredNorm() + bq.dot(cq));
+        const V3d w = bq.cross(cq);
+        const double wn = w.norm();
+        const double area = 0.5 * wn;
+        const double s = bq.squaredNorm() + cq.squaredNorm() + bq.dot(cq);
+        // d|bq x cq| / d bq = cq x w / |w|, d / d cq = w x bq / |w| (zero for a degenerate triangle).
+        const V3d dAreaB = wn > 0.0 ? V3d(0.5 * cq.cross(w) / wn) : V3d::Zero();
+        const V3d dAreaC = wn > 0.0 ? V3d(0.5 * w.cross(bq) / wn) : V3d::Zero();
+        db = (s / 6.0) * dAreaB + (area / 6.0) * (2.0 * bq + cq);
+        dc = (s / 6.0) * dAreaC + (area / 6.0) * (2.0 * cq + bq);
+        dq = -(db + dc);
+        return area / 6.0 * s;
     };
-    const auto triEnergy = [&](const V3d& p0, const V3d& p1, const V3d& p2) {
-        const V3d g = (p0 + p1 + p2) / 3.0;
+    // A triangle's energy and its gradient with respect to the corners, through the edge midpoints and centroid.
+    const auto triEnergyGrad = [&](const V3d& p0, const V3d& p1, const V3d& p2, V3d grad[3]) {
         const V3d p[3] = {p0, p1, p2};
+        const V3d g = (p0 + p1 + p2) / 3.0;
+        V3d dG = V3d::Zero();
+        grad[0] = grad[1] = grad[2] = V3d::Zero();
         double e = 0.0;
         for (int k = 0; k < 3; k++) {
+            const int k1 = (k + 1) % 3, k2 = (k + 2) % 3;
             const V3d& a = p[k];
-            const V3d mb = 0.5 * (a + p[(k + 1) % 3]), mc = 0.5 * (a + p[(k + 2) % 3]);
-            e += halfQuad(a, mb, g) + halfQuad(a, g, mc);
+            const V3d mb = 0.5 * (a + p[k1]), mc = 0.5 * (a + p[k2]);
+            V3d dq, db, dc;
+            e += halfQuadGrad(a, mb, g, dq, db, dc);  // db: d/d mb, dc: d/d g
+            grad[k] += dq + 0.5 * db;
+            grad[k1] += 0.5 * db;
+            dG += dc;
+            e += halfQuadGrad(a, g, mc, dq, db, dc);  // db: d/d g, dc: d/d mc
+            grad[k] += dq + 0.5 * dc;
+            grad[k2] += 0.5 * dc;
+            dG += db;
         }
+        for (int k = 0; k < 3; k++) grad[k] += dG / 3.0;
         return e;
     };
     const auto cornerOf = [](const Tri& t, int k, const std::vector<V3d>& pos) {
         return t.id[k] >= 0 ? pos[t.id[k]] : t.fixed[k];
     };
+    // Vertices whose position can change: the gradient of the others is not needed.
+    std::vector<char> moves(N, 0);
+    for (int id = 0; id < N; id++) moves[id] = !trisOf[id].empty() && !(id < I && sliderOf[id] < 0 && drivenBy[id] < 0);
     std::vector<V3d> pos, grad;
+    std::vector<double> triE(tris.size());
+    std::vector<std::array<V3d, 3>> triG(tris.size());
     const auto energy = [&](const Eigen::VectorXd& x, Eigen::VectorXd& g) {
         positions(x, pos);
+        const int T = static_cast<int>(tris.size());
+#pragma omp parallel for schedule(static)
+        for (int ti = 0; ti < T; ti++) {
+            const Tri& t = tris[ti];
+            V3d tg[3];
+            triE[ti] = t.weight * triEnergyGrad(cornerOf(t, 0, pos), cornerOf(t, 1, pos), cornerOf(t, 2, pos), tg);
+            for (int k = 0; k < 3; k++) triG[ti][k] = t.weight * tg[k];
+        }
+        // Summed in a fixed order, so results do not depend on the thread count.
         double f = 0.0;
-        for (const Tri& t : tris)
-            f += t.weight * triEnergy(cornerOf(t, 0, pos), cornerOf(t, 1, pos), cornerOf(t, 2, pos));
-        // Gradient per moving vertex: central differences over its own
-        // triangles (the energy of the others does not depend on it).
+        for (double e : triE) f += e;
         grad.assign(N, V3d::Zero());
-        const double h = 1e-6;
+#pragma omp parallel for schedule(dynamic, 256)
         for (int id = 0; id < N; id++) {
-            if (trisOf[id].empty() || (id < I && sliderOf[id] < 0 && drivenBy[id] < 0)) continue;
-            const V3d p = pos[id];
-            for (int axis = 0; axis < 3; axis++) {
-                double plus = 0.0, minus = 0.0;
-                for (int sign : {1, -1}) {
-                    pos[id] = p;
-                    pos[id][axis] += sign * h;
-                    double e = 0.0;
-                    for (int ti : trisOf[id]) {
-                        const Tri& t = tris[ti];
-                        e += t.weight * triEnergy(cornerOf(t, 0, pos), cornerOf(t, 1, pos), cornerOf(t, 2, pos));
-                    }
-                    (sign > 0 ? plus : minus) = e;
+            if (!moves[id]) continue;
+            V3d sum = V3d::Zero();
+            for (int ti : trisOf[id]) {
+                const Tri& t = tris[ti];
+                for (int k = 0; k < 3; k++) {
+                    if (t.id[k] == id) sum += triG[ti][k];
                 }
-                grad[id][axis] = (plus - minus) / (2.0 * h);
             }
-            pos[id] = p;
+            grad[id] = sum;
         }
         g.setZero(nv);
         // Back through the attachments, finest first.
@@ -1327,27 +1512,23 @@ int BorderLloydStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
     const double f0 = energy(x, g0);
     LBFGSpp::LBFGSBParam<double> param;
     param.m = 6;
-    param.max_iterations = maxIterations_;
+    param.max_iterations = params_.borderLloydIterations;
     param.epsilon = 1e-8;
     param.epsilon_rel = 1e-8;
     param.past = 1;
     param.delta = 1e-8;
     LBFGSpp::LBFGSBSolver<double> solver(param);
     double fx = f0;
-    int iterations = 0;
-    std::string status = "converged";
     try {
-        iterations = solver.minimize(energy, x, fx, lb, ub);
-        if (iterations >= maxIterations_) status = "stopped at the iteration limit";
-    } catch (const std::exception& e) {
-        status = std::string("line search stopped (") + e.what() + ")";
+        solver.minimize(energy, x, fx, lb, ub);
+    } catch (const std::exception&) {
+        // The line search can give up near the optimum; keep the last point, inside the bounds.
         x = x.cwiseMax(lb).cwiseMin(ub);
     }
     Eigen::VectorXd gx;
     const double fSolved = energy(x, gx);
     if (!(fSolved < f0)) {
         x = x0;
-        status += "; no improvement, kept as is";
     }
 
     // Fold check on every level: pull back the variables behind a folded
@@ -1365,7 +1546,7 @@ int BorderLloydStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
         std::sort(to.begin(), to.end());
         to.erase(std::unique(to.begin(), to.end()), to.end());
     }
-    const float cosMax = static_cast<float>(std::cos(maxNormalChangeDegrees_ * M_PI / 180.0));
+    const float cosMax = static_cast<float>(std::cos(params_.borderLloydMaxNormalChangeDegrees * M_PI / 180.0));
     // Turns are measured from each level's normals as it was built (before
     // any snapping moved it), so snapping and relaxing together stay within
     // the limit.
@@ -1385,7 +1566,6 @@ int BorderLloydStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
         return Vector3f(static_cast<float>(q.x()), static_cast<float>(q.y()), static_cast<float>(q.z()));
     };
     std::vector<int> halvings(nv, 0);
-    int pulledBack = 0;
     while (true) {
         positions(x, pos);
         std::vector<char> bad(nv, 0);
@@ -1403,7 +1583,7 @@ int BorderLloydStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
                 const Vector3f nn = (q[1] - q[0]).cross(q[2] - q[0]);
                 const Vector3f n0 = normal0[j][f];
                 // A fold: turned past the limit, or flattened (smallest angle
-                // under 1 degree; FixFlatTrianglesStep removed those before).
+                // under 1 degree; fixFlatTriangles() removed those before).
                 const bool turned = nn.dot(n0) <= cosMax * nn.norm() * n0.norm();
                 const bool flattened = SmallestOf(ToV3d(q[0]), ToV3d(q[1]), ToV3d(q[2])) < 1.0;
                 if (!turned && !flattened) continue;
@@ -1418,92 +1598,38 @@ int BorderLloydStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
         if (!any) break;
         for (int var = 0; var < nv; var++) {
             if (!bad[var]) continue;
-            if (halvings[var]++ == 0) pulledBack++;
+            halvings[var]++;
             // Halve the move five times, then undo it: ends once every move
             // behind a folded triangle is undone (the original has no fold).
             x[var] = halvings[var] > 5 ? x0[var] : x0[var] + 0.5 * (x[var] - x0[var]);
         }
     }
-    Eigen::VectorXd gAfter;
-    const double fAfter = energy(x, gAfter);
-
-    // Smallest angles of the triangles along borders: mean, and how many
-    // are under 20 degrees.
-    const auto quality = [&](const Mesh& m, const std::vector<int>& ids, double& mean, int& slivers, int& count) {
-        mean = 0.0;
-        slivers = count = 0;
-        for (const auto& t : m.triIndexes) {
-            if (ids[t.x()] < 0 && ids[t.y()] < 0 && ids[t.z()] < 0) continue;
-            const Vector3f p[3] = {m.vertexLocations[t.x()], m.vertexLocations[t.y()], m.vertexLocations[t.z()]};
-            float best = 180.0f;
-            for (int k = 0; k < 3; k++) {
-                const Vector3f a = p[(k + 1) % 3] - p[k], b = p[(k + 2) % 3] - p[k];
-                const float c = a.dot(b) / std::max(1e-20f, a.norm() * b.norm());
-                best = std::min(best, std::acos(std::clamp(c, -1.0f, 1.0f)) * 180.0f / static_cast<float>(M_PI));
-            }
-            mean += best;
-            slivers += best < 20.0f;
-            count++;
-        }
-        if (count) mean /= count;
-    };
     positions(x, pos);
+    const std::vector<std::vector<Vector3f>> before = PositionsOf(builder.levels);
     for (int j = 0; j < levels; j++) {
         Mesh& m = builder.levels[j].simplified;
-        std::vector<double> before, after;
-        double meanBefore = 0.0, meanAfter = 0.0;
-        int sliversBefore = 0, sliversAfter = 0, count = 0;
-        quality(m, vertexId[j], meanBefore, sliversBefore, count);
-        for (const auto& [a, b] : borders[j].edges)
-            before.push_back((m.vertexLocations[a] - m.vertexLocations[b]).norm());
         for (size_t v = 0; v < m.vertexLocations.size(); v++) {
             if (vertexId[j][v] >= 0) m.vertexLocations[v] = pointOfId(pos, vertexId[j][v]);
         }
-        for (const auto& [a, b] : borders[j].edges)
-            after.push_back((m.vertexLocations[a] - m.vertexLocations[b]).norm());
-        quality(m, vertexId[j], meanAfter, sliversAfter, count);
-        std::cout << "Level " << j << " border relaxation: " << count
-                  << " triangles along borders, mean smallest angle " << meanBefore << " -> " << meanAfter
-                  << " deg, under 20 deg " << sliversBefore << " -> " << sliversAfter << "; border edge length spread "
-                  << SpreadOf(before) << " -> " << SpreadOf(after) << '\n';
+        ReprojectTexcoords(builder.levels[j], before[j]);
     }
-    std::cout << "Border relaxation (CVT energy of " << tris.size() << " triangles along borders): " << sliders.size()
-              << " free and " << driven.size() << " attached vertices sliding, " << rings.size()
-              << " inner vertices next to borders moving in their tangent planes, "
-              << std::count(pinned.begin(), pinned.end(), 1) << " junctions fixed; L-BFGS-B " << status << " after "
-              << iterations << " iterations; energy " << f0 << " -> " << fSolved << " (" << fAfter
-              << " after pulling back " << pulledBack << " moves for folding), gradient norm " << g0.norm() << " -> "
-              << gx.norm() << '\n';
-    return builder.chartCount;
+    return true;
 }
 
-int ExportMlodStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
+bool MeshletBuilder::writeMlod()
 {
-    if (builder.levels.empty()) return builder.chartCount;
+    MeshletBuilder& builder = *this;
+    if (builder.levels.empty()) return true;
     // Can any two levels be drawn side by side without cracks?
-    {
+    if (builder.checkCracks()) {
+        builder.exportReport.cracksChecked = true;
         const LevelCrackReport cracks = MeasureLevelCracks(builder.levels, builder.regionHierarchy);
-        int off = 0, missing = 0, fineChecked = 0, coarseChecked = 0;
-        for (const LevelPairCracks& p : cracks.pairs) {
-            off += p.fineOff;
-            missing += p.coarseMissing;
-            fineChecked += p.fineChecked;
-            coarseChecked += p.coarseChecked;
-            if (p.fineOff == 0 && p.coarseMissing == 0) continue;
-            std::cerr << "Warning: " << "Cracks between levels " << p.fine << " and " << p.coarse << ": " << p.fineOff
-                      << " of " << p.fineChecked << " finer border vertices off the coarser border (max "
-                      << p.maxDistance << "), " << p.coarseMissing << " of " << p.coarseChecked
-                      << " coarser border vertices not on the finer border" << '\n';
-        }
         builder.exportReport.levelPairsWithCracks = cracks.pairsWithCracks();
         builder.exportReport.levelPairs = static_cast<int>(cracks.pairs.size());
-        std::cout << "Level cracks: " << cracks.pairsWithCracks() << " of " << cracks.pairs.size()
-                  << " level pairs with cracks; " << off << " of " << fineChecked << " finer vertices off, " << missing
-                  << " of " << coarseChecked << " coarser vertices missing" << '\n';
     }
     // All of them as one meshlet LOD DAG.
     const std::filesystem::path& file = builder.mlodFile();
-    if (file.empty()) return builder.chartCount;
+    if (file.empty()) return true;
     if (file.has_parent_path()) {
         std::error_code ec;
         std::filesystem::create_directories(file.parent_path(), ec);
@@ -1513,55 +1639,8 @@ int ExportMlodStep::run(HierarchyBuilder& builder, StatusHandler /*handler*/)
     if (WriteMlodFile(file, builder.levels, builder.regionHierarchy, error, &stats)) {
         builder.exportReport.written = true;
         builder.exportReport.stats = stats;
-        std::cout << "Saved " << file.string() << ": " << stats.levels << " levels, " << stats.groups << " groups, "
-                  << stats.clusters << " meshlets, " << stats.triangles << " triangles" << '\n';
     } else {
         builder.exportReport.error = error;
-        std::cerr << "Meshlet LOD export failed: " << error << '\n';
     }
-    return builder.chartCount;
-}
-
-void mopt::AddHierarchySteps(Pipeline& pipeline, const HierarchyParams& params)
-{
-    pipeline.add(std::make_unique<BaseChartsStep>(params.cvt));
-    pipeline.add(std::make_unique<BaseLevelStep>(params.randomSeed, params.maxCliqueSize, params.absorbSingletons));
-    if (params.straightenBaseSeams) pipeline.add(std::make_unique<BaseSeamsStep>());
-    Pipeline level;
-    level.add(std::make_unique<ClusterLevelStep>(params.keepDisks, params.maxHoleFraction));
-    level.add(std::make_unique<LevelCutStep>());
-    level.add(std::make_unique<LevelFlattenStep>(params.lscmIterations, params.lscmPaddingRings));
-    level.add(std::make_unique<LevelBlueNoiseStep>(params.resample));
-    level.add(std::make_unique<LevelCvtStep>());
-    level.add(std::make_unique<LevelTriangulateStep>());
-    level.add(std::make_unique<LevelLiftStep>());
-    level.add(std::make_unique<LevelProjectStep>());
-    level.add(std::make_unique<LevelReconstituteStep>());
-    if (params.splitAboveFaces > 0) level.add(std::make_unique<LevelSplitStep>(params.splitAboveFaces));
-    auto bordersState = std::make_shared<LevelBordersState>();
-    if (params.simplifyBorders) {
-        level.add(std::make_unique<LevelBordersStep>(params.borders, params.snapFinerLevels, bordersState));
-    }
-    const int stopAtRegions = params.stopAtRegions;
-    pipeline.add(std::make_unique<RepeatStep>(
-        "HierarchyLevels", std::move(level),
-        [stopAtRegions](const HierarchyBuilder& builder) {
-            // Stop at stopAtRegions regions, or once a level no longer gets
-            // coarser (every vertex already on a region border: e.g. a torus,
-            // which disk-shaped regions cannot cover with only two).
-            const auto& levels = builder.levels;
-            const bool progress = levels.size() < 2 || levels.back().simplified.vertexLocations.size() <
-                                                           levels[levels.size() - 2].simplified.vertexLocations.size();
-            return progress && builder.regionHierarchy.topNodeCount() > stopAtRegions;
-        },
-        std::max(0, params.maxDepth)));
-    if (params.simplifyBorders) {
-        pipeline.add(std::make_unique<FixFlatTrianglesStep>(bordersState, params.flatMinAngleDegrees,
-                                                            params.flatMaxNormalChangeDegrees));
-    }
-    if (params.simplifyBorders && params.relaxBorders) {
-        pipeline.add(std::make_unique<BorderLloydStep>(bordersState, params.borderLloydIterations,
-                                                       params.borderLloydMaxNormalChangeDegrees));
-    }
-    pipeline.add(std::make_unique<ExportMlodStep>());
+    return true;
 }

@@ -6,7 +6,6 @@
 #include <core/Check.hpp>
 #include <core/Types.hpp>
 #include <hierarchy/RegionHierarchy.hpp>
-#include <iostream>
 #include <mesh/Mesh.hpp>
 
 #include <algorithm>
@@ -191,7 +190,6 @@ bool mopt::AddRegionHierarchyLevel(RegionHierarchy& tree)
         int groups = static_cast<int>(groupSize.size());
         if (groups == n) {
             // No two nodes touch: separate surface pieces, joined at the root.
-            std::cout << "Region hierarchy: " << n << " disconnected nodes joined at the root" << '\n';
             std::fill(group.begin(), group.end(), 0);
             groupSize.assign(1, n);
             groups = 1;

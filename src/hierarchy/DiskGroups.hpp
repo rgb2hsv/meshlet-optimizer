@@ -37,26 +37,15 @@ struct DiskGroupParams {
     bool ejectMembers = true;
 };
 
-// How many groups were not disks before and after, and how many regions were moved.
-struct DiskGroupStats {
-    int groupsBefore = 0;
-    int nonDiskBefore = 0;  // groups of two or more regions that were not disks
-    int holesFilled = 0;
-    int regionsFilled = 0;  // regions moved into the group around them
-    int regionsEjected = 0;
-    int nonDiskAfter = 0;
-    int groupsAfter = 0;
-};
-
 // faceRegion: region of each mesh face, in [0, regionCount).
 // regionAdjacency: regions sharing an edge. regionWeight: tie-breaks.
 // group[region] (any ids) is updated in place, absorbed[region] set to 1 for
 // regions that joined a group by filling or ejection and 0 for regions made
 // groups of their own. New group ids are larger than any given one.
-DiskGroupStats MakeGroupsDisks(const Mesh& mesh, const std::vector<int>& faceRegion, int regionCount,
-                               const std::vector<std::vector<int>>& regionAdjacency,
-                               const std::vector<int>& regionWeight, std::vector<int>& group,
-                               std::vector<char>& absorbed, const DiskGroupParams& params = {});
+bool MakeGroupsDisks(const Mesh& mesh, const std::vector<int>& faceRegion, int regionCount,
+                     const std::vector<std::vector<int>>& regionAdjacency, const std::vector<int>& regionWeight,
+                     std::vector<int>& group, std::vector<char>& absorbed, const DiskGroupParams& params = {},
+                     const std::vector<int>& regionIsland = {});
 
 // V - E + F of the faces of the given regions, as one surface.
 long long RegionsEulerCharacteristic(const Mesh& mesh, const std::vector<std::vector<int>>& facesOfRegion,

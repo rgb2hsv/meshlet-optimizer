@@ -19,6 +19,7 @@
 #include <fstream>
 #include <map>
 #include <queue>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -37,9 +38,15 @@ struct Vertex {
     float nx, ny, nz;
 };
 
-// The .mlod model: vertices, level-0 indices and bounds.
+// Texture coordinates of a vertex (version 2).
+struct Texcoord {
+    float u, v;
+};
+
+// The .mlod model: vertices, their texture coordinates (version 2; empty without), level-0 indices and bounds.
 struct Model {
     std::vector<Vertex> vertices;
+    std::vector<Texcoord> texcoords;
     std::vector<uint32_t> indices;
     float boundsMin[3] = {0, 0, 0};
     float boundsMax[3] = {0, 0, 0};
@@ -132,7 +139,9 @@ static_assert(sizeof(Vertex) == 24 && sizeof(meshopt_Meshlet) == 16 && sizeof(Me
               ".mlod layout changed: update the writer to match meshlet-viewer");
 
 constexpr uint32_t kMagic = 0x444f4c4d;  // "MLOD" in little endian
+// Version 1: no texture coordinates. Version 2: a texture coordinate per vertex, right after the vertices.
 constexpr uint32_t kVersion = 1;
+constexpr uint32_t kTexcoordVersion = 2;
 
 using OutputArchive = cereal::PortableBinaryOutputArchive;
 
@@ -152,13 +161,14 @@ void SizeArray(OutputArchive& ar, const std::vector<size_t>& v)
     Array<uint64_t>(ar, wide);
 }
 
-void Archive(OutputArchive& ar, Model& m, MeshletSettings& s, MeshletData& d)
+void Archive(OutputArchive& ar, uint32_t version, Model& m, MeshletSettings& s, MeshletData& d)
 {
     int32_t algorithm = int32_t(s.algorithm);
     ar(algorithm, s.maxVertices, s.maxTriangles, s.minTriangles, s.coneWeight, s.splitFactor, s.fillWeight, s.optimize);
     ar(s.lod, s.lodSpatial, s.lodSimplifyRatio, s.lodPartitionSize);
 
     Array<uint32_t>(ar, m.vertices);
+    if (version >= kTexcoordVersion) Array<uint32_t>(ar, m.texcoords);
     Array<uint32_t>(ar, m.indices);
     ar(m.boundsMin, m.boundsMax, m.center, m.radius, m.avgEdgeLength);
 
@@ -293,7 +303,7 @@ std::vector<V3> AreaWeightedNormals(const Mesh& mesh)
 }
 
 // Meshlets of a set of faces: meshlets index into vertices/triangles, and
-// globalOf maps local vertex ids back to the mesh's.
+// globalOf maps local vertex ids back to the level's output vertices.
 struct FaceMeshlets {
     std::vector<meshopt_Meshlet> meshlets;
     std::vector<unsigned int> vertices;
@@ -308,14 +318,15 @@ constexpr size_t kMeshletTriangleCeiling = 256;
 
 // One meshlet holding exactly these faces, or an empty result when they
 // exceed the format's ceiling.
-FaceMeshlets WholeMeshlet(const Mesh& mesh, const std::vector<int>& faces)
+// cornerVertex: the output vertex of every triangle corner of the level.
+FaceMeshlets WholeMeshlet(const Mesh& mesh, const std::vector<uint32_t>& cornerVertex, const std::vector<int>& faces)
 {
     FaceMeshlets out;
     if (faces.empty() || faces.size() > kMeshletTriangleCeiling) return out;
     std::map<uint32_t, uint32_t> local;
     for (int f : faces) {
-        const Vector3u t = mesh.triIndexes[f];
-        for (uint32_t v : {t.x(), t.y(), t.z()}) {
+        for (int c = 0; c < 3; c++) {
+            const uint32_t v = cornerVertex[3 * f + c];
             const auto [it, inserted] = local.emplace(v, static_cast<uint32_t>(out.globalOf.size()));
             if (inserted) out.globalOf.push_back(v);
             out.triangles.push_back(static_cast<unsigned char>(it->second & 0xff));
@@ -449,15 +460,42 @@ bool mopt::WriteMlodFile(const std::filesystem::path& file, const std::vector<Lo
     mlod::MeshletData data;
     data.lod = true;
 
-    // Vertex buffer: every level's surface; index buffer: level 0.
+    // Vertex buffer: every level's surface; index buffer: level 0. With texture coordinates, a vertex on a
+    // texture seam becomes one output vertex per texture coordinate it has (same position and normal).
+    const bool textured =
+        std::all_of(levels.begin(), levels.end(), [](const LodLevel& l) { return l.simplified.hasTexcoords(); });
     std::vector<uint32_t> vertexBase(levelCount);
+    std::vector<std::vector<uint32_t>> cornerVertex(levelCount);  // per level: corner -> output vertex - base
     for (int k = 0; k < levelCount; k++) {
         const Mesh& mesh = levels[k].simplified;
         vertexBase[k] = static_cast<uint32_t>(model.vertices.size());
         const std::vector<V3> normals = AreaWeightedNormals(mesh);
-        for (size_t v = 0; v < mesh.vertexLocations.size(); v++) {
+        const auto addVertex = [&](uint32_t v) {
             const V3 p = mesh.vertexLocations[v];
             model.vertices.push_back({p.x(), p.y(), p.z(), normals[v].x(), normals[v].y(), normals[v].z()});
+        };
+        std::vector<uint32_t>& corners = cornerVertex[k];
+        corners.resize(3 * mesh.triIndexes.size());
+        if (!textured) {
+            for (size_t v = 0; v < mesh.vertexLocations.size(); v++) addVertex(static_cast<uint32_t>(v));
+            for (size_t f = 0; f < mesh.triIndexes.size(); f++) {
+                for (int c = 0; c < 3; c++) corners[3 * f + c] = mesh.triIndexes[f][c];
+            }
+            continue;
+        }
+        std::map<std::tuple<uint32_t, float, float>, uint32_t> outputOf;
+        for (size_t f = 0; f < mesh.triIndexes.size(); f++) {
+            for (int c = 0; c < 3; c++) {
+                const uint32_t v = mesh.triIndexes[f][c];
+                const Vector2f uv = mesh.texcoords[3 * f + c];
+                const uint32_t next = static_cast<uint32_t>(model.vertices.size()) - vertexBase[k];
+                const auto [it, inserted] = outputOf.emplace(std::make_tuple(v, uv.x(), uv.y()), next);
+                if (inserted) {
+                    addVertex(v);
+                    model.texcoords.push_back({uv.x(), uv.y()});
+                }
+                corners[3 * f + c] = it->second;
+            }
         }
     }
     const Mesh& base = levels[0].simplified;
@@ -468,7 +506,8 @@ bool mopt::WriteMlodFile(const std::filesystem::path& file, const std::vector<Lo
     double area = 0.0, edgeSum = 0.0;
     V3 centroid = V3::Zero(), lo = V3::Constant(FLT_MAX), hi = V3::Constant(-FLT_MAX);
     for (const Vector3u& t : base.triIndexes) {
-        for (uint32_t v : {t.x(), t.y(), t.z()}) model.indices.push_back(vertexBase[0] + v);
+        const size_t f = &t - base.triIndexes.data();
+        for (int c = 0; c < 3; c++) model.indices.push_back(vertexBase[0] + cornerVertex[0][3 * f + c]);
         const V3 a = base.vertexLocations[t.x()], b = base.vertexLocations[t.y()], c = base.vertexLocations[t.z()];
         const float triArea = 0.5f * ((b - a).cross(c - a)).norm();
         area += triArea;
@@ -594,7 +633,7 @@ bool mopt::WriteMlodFile(const std::filesystem::path& file, const std::vector<Lo
             // beyond the format's ceiling is split, into the fewest parts of
             // about equal size that each fit (partitionEvenly).
             std::vector<FaceMeshlets> pieces;
-            FaceMeshlets whole = WholeMeshlet(mesh, faces);
+            FaceMeshlets whole = WholeMeshlet(mesh, cornerVertex[k], faces);
             if (!whole.meshlets.empty()) {
                 pieces.push_back(std::move(whole));
             } else {
@@ -603,7 +642,7 @@ bool mopt::WriteMlodFile(const std::filesystem::path& file, const std::vector<Lo
                     bool fits = true;
                     for (const std::vector<int>& part : PartitionEvenly(mesh, faces, parts)) {
                         if (part.empty()) continue;
-                        attempt.push_back(WholeMeshlet(mesh, part));
+                        attempt.push_back(WholeMeshlet(mesh, cornerVertex[k], part));
                         fits &= !attempt.back().meshlets.empty();
                     }
                     if (fits) {
@@ -767,9 +806,9 @@ bool mopt::WriteMlodFile(const std::filesystem::path& file, const std::vector<Lo
                 return false;
             }
             mlod::OutputArchive ar(out);
-            uint32_t magic = mlod::kMagic, version = mlod::kVersion;
+            uint32_t magic = mlod::kMagic, version = textured ? mlod::kTexcoordVersion : mlod::kVersion;
             ar(magic, version);
-            mlod::Archive(ar, model, settings, data);
+            mlod::Archive(ar, version, model, settings, data);
             out.flush();
             if (!out) {
                 error = "write failed: " + temp.string();

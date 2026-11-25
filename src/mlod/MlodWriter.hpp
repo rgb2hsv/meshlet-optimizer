@@ -5,7 +5,9 @@
  * format of meshlet-viewer (src/meshlet_file.* there):
  * the mesh, the builder settings and the full meshlet DAG (clusters, cone
  * bounds, per-cluster LOD errors, edge masks and the LOD selection BVH) in
- * one cereal portable binary archive (magic "MLOD", version 1).
+ * one cereal portable binary archive (magic "MLOD"). Version 1 has no
+ * texture coordinates; version 2 adds one per vertex, right after the
+ * vertices, and splits vertices on texture seams (one per texture coordinate).
  *
  * The hierarchy maps onto the meshlet DAG as follows:
  *   - every level's surface is part of the vertex buffer; the index buffer
@@ -29,7 +31,7 @@
  *   - the selection BVH is clodBuildHierarchy's (meshoptimizer's
  *     demo/clusterlod.h), 8 wide, one tree per depth, as the viewer builds it.
  * Swapping a group for the region above it is crack-free because region
- * borders are kept across levels (see HierarchySteps.hpp).
+ * borders are kept across levels (see MeshletBuilder.hpp).
  */
 #pragma once
 
@@ -52,7 +54,7 @@ struct MlodStats {
     int levels = 0;
 };
 
-// The levels and their region hierarchy as built by AddHierarchySteps.
+// The levels and their region hierarchy as built by MeshletBuilder.
 // Returns false and sets error when nothing could be written.
 bool WriteMlodFile(const std::filesystem::path& file, const std::vector<LodLevel>& levels, const RegionHierarchy& tree,
                    std::string& error, MlodStats* stats = nullptr);

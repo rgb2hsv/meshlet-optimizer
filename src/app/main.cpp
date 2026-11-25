@@ -1,8 +1,7 @@
 // meshlet-optimizer: PLY in, meshlet LOD hierarchy (.mlod for meshlet-viewer) out.
 #include "Options.hpp"
 
-#include <hierarchy/HierarchyBuilder.hpp>
-#include <hierarchy/HierarchySteps.hpp>
+#include <hierarchy/MeshletBuilder.hpp>
 #include <mesh/MeshProjector.hpp>
 #include <mesh/PlyReader.hpp>
 
@@ -57,9 +56,9 @@ int main(int argc, char** argv)
     std::cout << "Loaded " << options.input.string() << ": " << mesh.vertexLocations.size() << " vertices, "
               << mesh.triIndexes.size() << " triangles; " << threads << " thread(s)" << '\n';
 
-    HierarchyBuilder builder;
+    MeshletBuilder builder(options.hierarchy);
     builder.setMlodFile(options.output);
-    builder.buildPipeline(options.hierarchy);
+    builder.setCheckCracks(options.checkCracks);
 
     // Resampled vertices are snapped back onto the input surface.
     std::unique_ptr<MeshProjector> surface;
@@ -69,9 +68,8 @@ int main(int argc, char** argv)
     }
 
     try {
-        builder.build(mesh, [](const std::string& label, float progress) {
-            std::cout << label << " (" << static_cast<int>(progress * 100.0f) << "%)" << '\n';
-            return true;
+        builder.build(mesh, [](const std::string& stage, double stageSeconds) {
+            std::cout << stage << " (" << stageSeconds << " s)\n";
         });
     } catch (const std::exception& e) {
         std::cerr << "Hierarchy build failed: " << e.what() << "\n";
@@ -79,7 +77,7 @@ int main(int argc, char** argv)
     }
     builder.projectToSurface = nullptr;
 
-    const HierarchyBuilder::ExportReport& report = builder.exportReport;
+    const MeshletBuilder::ExportReport& report = builder.exportReport;
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     if (!report.written) {
         std::cerr << "Could not write " << options.output.string() << ": "
@@ -89,8 +87,11 @@ int main(int argc, char** argv)
     if (!options.quiet) {
         std::cout << options.output.string() << ": " << report.stats.levels << " levels, " << report.stats.clusters
                   << " meshlets in " << report.stats.groups << " groups, " << report.stats.vertices << " vertices, "
-                  << report.stats.triangles << " triangles over all levels; " << report.levelPairsWithCracks << " of "
-                  << report.levelPairs << " level pairs crack; " << seconds << " s\n";
+                  << report.stats.triangles << " triangles over all levels; ";
+        if (report.cracksChecked) {
+            std::cout << report.levelPairsWithCracks << " of " << report.levelPairs << " level pairs crack; ";
+        }
+        std::cout << seconds << " s\n";
     }
     if (options.check) {
         if (!HasMlodHeader(options.output)) {

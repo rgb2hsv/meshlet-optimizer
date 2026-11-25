@@ -97,26 +97,14 @@ public:
     {
     }
 
-    BorderSimplificationStats run()
+    void run()
     {
-        BorderSimplificationStats stats;
         const EdgeFaces edgeFaces = BuildEdgeFaces(mesh_);
         const Measure before = MeasureBorders(mesh_, label_, edgeFaces);
-        stats.borderVerticesBefore = before.borderVertices;
-        stats.borderMeanBefore = before.borderMean;
-        stats.interiorMean = before.interiorMean;
-        if (before.borderVertices == 0) {
-            stats.borderVerticesAfter = 0;
-            return stats;
-        }
+        if (before.borderVertices == 0) return;
         setUp(edgeFaces, before.interiorMean);
-        stats.chains = static_cast<int>(chains_.size());
-        collapseAll(stats);
+        collapseAll();
         compact();
-        const Measure after = MeasureBorders(mesh_, label_, BuildEdgeFaces(mesh_));
-        stats.borderVerticesAfter = after.borderVertices;
-        stats.borderMeanAfter = after.borderMean;
-        return stats;
     }
 
 private:
@@ -353,13 +341,13 @@ private:
 
     void collapse(uint32_t v, uint32_t u)
     {
-        const bool uvTexture = mesh_.textureMap.size() == 3 * tris_.size();
+        const bool uvTexture = mesh_.texcoords.size() == 3 * tris_.size();
         // u's corner UV in each region, from u's own faces.
         std::unordered_map<int, Vector2f> uvOfU;
         if (uvTexture) {
             for (int f : vertexFaces_[u]) {
                 for (int k = 0; k < 3; k++) {
-                    if (tris_[f][k] == u) uvOfU.emplace(label_[f], mesh_.textureMap[3 * f + k]);
+                    if (tris_[f][k] == u) uvOfU.emplace(label_[f], mesh_.texcoords[3 * f + k]);
                 }
             }
         }
@@ -380,7 +368,7 @@ private:
                 t[k] = u;
                 if (uvTexture) {
                     const auto it = uvOfU.find(label_[f]);
-                    if (it != uvOfU.end()) mesh_.textureMap[3 * f + k] = it->second;
+                    if (it != uvOfU.end()) mesh_.texcoords[3 * f + k] = it->second;
                 }
             }
             vertexFaces_[u].push_back(f);
@@ -401,7 +389,7 @@ private:
         if (!junction_[u] || !junction_[b]) push(u, b);
     }
 
-    void collapseAll(BorderSimplificationStats& stats)
+    void collapseAll()
     {
         while (!queue_.empty()) {
             const Item item = queue_.top();
@@ -429,14 +417,11 @@ private:
                 const Verdict verdict = check(v, u);
                 if (verdict == Verdict::Ok) {
                     if (!snapUnder(v, u)) {
-                        stats.rejectedSnap++;
                         continue;
                     }
                     collapse(v, u);
-                    stats.collapsed++;
                     break;
                 }
-                (verdict == Verdict::Fold ? stats.rejectedFold : stats.rejectedTopology)++;
             }
         }
     }
@@ -444,7 +429,7 @@ private:
     void compact()
     {
         const size_t V = mesh_.vertexLocations.size(), F = tris_.size();
-        const bool uvTexture = mesh_.textureMap.size() == 3 * F;
+        const bool uvTexture = mesh_.texcoords.size() == 3 * F;
         std::vector<uint32_t> remap(V, UINT32_MAX);
         std::vector<Vector3u> tris;
         std::vector<Vector2f> uv;
@@ -457,7 +442,7 @@ private:
                 uint32_t& r = remap[tris_[f][k]];
                 if (r == UINT32_MAX) r = next++;
                 t[k] = r;
-                if (uvTexture) uv.push_back(mesh_.textureMap[3 * f + k]);
+                if (uvTexture) uv.push_back(mesh_.texcoords[3 * f + k]);
             }
             tris.push_back(Vector3u(t[0], t[1], t[2]));
             label.push_back(label_[f]);
@@ -475,7 +460,7 @@ private:
         mesh_.vertexLocations = std::move(locations);
         if (hasNormals) mesh_.vertexNormals = std::move(normals);
         mesh_.triIndexes = std::move(tris);
-        if (uvTexture) mesh_.textureMap = std::move(uv);
+        if (uvTexture) mesh_.texcoords = std::move(uv);
         label_ = std::move(label);
     }
 
@@ -498,8 +483,7 @@ private:
 };
 }  // namespace
 
-BorderSimplificationStats mopt::SimplifyRegionBorders(Mesh& mesh, std::vector<int>& faceRegion,
-                                                      const BorderSimplificationParams& params)
+void mopt::SimplifyRegionBorders(Mesh& mesh, std::vector<int>& faceRegion, const BorderSimplificationParams& params)
 {
-    return Collapser(mesh, faceRegion, params).run();
+    Collapser(mesh, faceRegion, params).run();
 }

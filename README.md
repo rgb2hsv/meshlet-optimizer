@@ -52,15 +52,17 @@ cmake --build --preset ninja
 ctest --preset ninja
 ```
 
-The test runs the metasphere with `--check`, which fails unless the `.mlod` was written and no pair of levels
-cracks.
+The test runs the metasphere with `--check --check-cracks`, which fails unless the `.mlod` was written and no
+pair of levels cracks.
 
 ## Options
 
 `meshlet-optimizer --help` lists every option with its default. The groups are:
 
-- **General**: `-o/--output`, `-j/--threads`, `--check`, `-q/--quiet`, and `--no-project` (leave new vertices
-  in the flattened surface instead of snapping them onto the input).
+- **General**: `-o/--output`, `-j/--threads`, `-q/--quiet`, `--no-project` (leave new vertices in the
+  flattened surface instead of snapping them onto the input), `--check` (fail unless the `.mlod` was written)
+  and `--check-cracks` (check every pair of levels for cracks before writing; off by default, as its cost
+  grows with the square of the level count).
 - **Base charts**: chart size, CVT iterations, seed, label regularization.
 - **Hierarchy**: clustering seed, clique size, when to stop, disk-shaped groups, seam straightening.
 - **Flattening**: LSCM iterations and padding.
@@ -77,7 +79,7 @@ cracks.
 | `src/mesh` | `Mesh`, PLY reader (happly), edge-collapse `MeshDecimation`, `MeshProjector` (closest point on the input) |
 | `src/charts` | Base charts: `CvtSegmentation` and `LabelRegularization` |
 | `src/flattening` | `ChartLayout`, `Mosaic`, and the flattening functions (mosaic build, planar start, LSCM) |
-| `src/hierarchy` | `HierarchyBuilder`, the `Pipeline` of steps (`HierarchySteps`), `RegionHierarchy`, remeshing, border simplification, crack check |
+| `src/hierarchy` | `MeshletBuilder` (every stage of the build, in order), `RegionHierarchy`, remeshing, border simplification, crack check |
 | `src/mlod` | `MlodWriter`: the levels as the viewer's meshlet DAG |
 | `assets/model` | `metasphere.ply`, the test model |
 
@@ -88,8 +90,8 @@ cracks.
   `UPPER_CASE`. Files are named after the class or topic they hold. `.clang-tidy` checks the naming.
 - Vectors and matrices are Eigen's (`Vector3f`, `Matrix4f`, `std::vector<Vector3u>` for storage); the
   build defines `EIGEN_INITIALIZE_MATRICES_BY_ZERO`.
-- Progress goes to `std::cout`, warnings and errors to `std::cerr`; broken invariants throw through
-  `Expects`.
+- The library prints nothing: `MeshletBuilder::build` reports each stage (name and duration) to a callback,
+  and the command line prints those lines. Broken invariants throw through `Expects`.
 - Formatting is `.clang-format`, enforced by pre-commit:
 
   ```

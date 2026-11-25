@@ -19,7 +19,7 @@ void AddDisable(argparse::ArgumentParser& p, const std::string& name, const std:
 
 std::optional<int> ParseOptions(int argc, const char* const* argv, Options& options)
 {
-    const HierarchyParams d;  // defaults, shown in --help
+    const MeshletParams d;  // defaults, shown in --help
     argparse::ArgumentParser p("meshlet-optimizer", kVersion);
     p.add_description(
         "Builds the chart hierarchy of a triangle mesh (CVT charts, then levels of clustered, flattened and "
@@ -31,7 +31,12 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
     p.add_argument("--no-project")
         .help("keep resampled vertices where they are instead of projecting them onto the input surface")
         .flag();
-    p.add_argument("--check").help("exit with an error unless the .mlod was written and no two levels crack").flag();
+    p.add_argument("--check")
+        .help("exit with an error unless the .mlod was written (and, with --check-cracks, no two levels crack)")
+        .flag();
+    p.add_argument("--check-cracks")
+        .help("check every pair of levels for cracks before writing (slow with many levels)")
+        .flag();
     p.add_argument("-q", "--quiet").help("only print errors").flag();
 
     p.add_group("Base charts (restricted CVT)");
@@ -80,7 +85,10 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
     AddDisable(p, "straighten-seams", "keep the base charts' borders as the CVT left them");
 
     p.add_group("Flattening");
-    p.add_argument("--lscm-iterations").help("LSCM solver iterations").scan<'i', int>().default_value(d.lscmIterations);
+    p.add_argument("--lscm-iterations")
+        .help("conjugate-gradient iterations if the LSCM factorization fails")
+        .scan<'i', int>()
+        .default_value(d.lscmIterations);
     p.add_argument("--lscm-padding")
         .help("rings of neighbour triangles flattened with each region")
         .scan<'i', int>()
@@ -157,9 +165,10 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
     o.threads = p.get<int>("--threads");
     o.project = !p.get<bool>("--no-project");
     o.check = p.get<bool>("--check");
+    o.checkCracks = p.get<bool>("--check-cracks");
     o.quiet = p.get<bool>("--quiet");
 
-    HierarchyParams& h = o.hierarchy;
+    MeshletParams& h = o.hierarchy;
     h.cvt.regularization.maxTrianglesPerChart = p.get<int>("--chart-triangles");
     h.cvt.lloydIterations = p.get<int>("--cvt-lloyd");
     h.cvt.lbfgsIterations = p.get<int>("--cvt-lbfgs");

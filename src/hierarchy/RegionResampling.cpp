@@ -5,9 +5,9 @@
  */
 #include <charts/CvtSegmentation.hpp>
 #include <core/Check.hpp>
+#include <core/TriangleGeometry.hpp>
 #include <core/Types.hpp>
 #include <hierarchy/RegionResampling.hpp>
-#include <iostream>
 #include <mesh/MeshDecimation.hpp>
 
 #include <CDT.h>
@@ -135,17 +135,13 @@ private:
     std::vector<std::vector<int>> buckets_;
 };
 
-bool Report(const std::exception& e, int region)
-{
-    std::cout << "Region " << region << " kept its original triangles: " << e.what() << '\n';
-    return false;
-}
 }  // namespace
 
 RegionResampler::RegionResampler(const Mesh& cutMesh, const std::vector<Mosaic>& mosaics,
                                  const RegionResampleParams& params)
     : positions_(cutMesh.vertexLocations.begin(), cutMesh.vertexLocations.end()),
       normals_(cutMesh.vertexNormals.begin(), cutMesh.vertexNormals.end()),
+      hasTexcoords_(cutMesh.hasTexcoords()),
       params_(params)
 {
     regions_.resize(mosaics.size());
@@ -160,10 +156,16 @@ RegionResampler::RegionResampler(const Mesh& cutMesh, const std::vector<Mosaic>&
             region.meshId[i] = mosaic.vertexes[i].meshId;
         }
         region.faces.reserve(mosaic.faces.size());
+        if (hasTexcoords_) region.texcoord.assign(n, Vector2f::Zero());
         for (const MosaicFace& f : mosaic.faces) {
-            region.faces.push_back({static_cast<int>(mosaic.vertexMap.at(f.mapFace.x())),
-                                    static_cast<int>(mosaic.vertexMap.at(f.mapFace.y())),
-                                    static_cast<int>(mosaic.vertexMap.at(f.mapFace.z()))});
+            const Tri local = {static_cast<int>(mosaic.vertexMap.at(f.mapFace.x())),
+                               static_cast<int>(mosaic.vertexMap.at(f.mapFace.y())),
+                               static_cast<int>(mosaic.vertexMap.at(f.mapFace.z()))};
+            region.faces.push_back(local);
+            // The mosaic face's corners are the mesh face's, in order.
+            if (hasTexcoords_) {
+                for (int k = 0; k < 3; k++) region.texcoord[local[k]] = cutMesh.texcoords[3 * f.fid + k];
+            }
         }
         // Boundary: edges used by a single face of the region.
         const auto key = [](int a, int b) { return (uint64_t(uint32_t(a)) << 32) | uint32_t(b); };
@@ -187,6 +189,7 @@ RegionResampler::RegionResampler(const Mesh& cutMesh, const std::vector<Mosaic>&
                 if (region.boundaryIndex[v] < 0) {
                     region.boundaryIndex[v] = static_cast<int>(region.boundary.size());
                     region.boundary.push_back(region.meshId[v]);
+                    region.boundaryLocal.push_back(v);
                 }
             }
         }
@@ -274,9 +277,11 @@ bool RegionResampler::decimate(Region& region) const
     for (int i = 0; i < n; i++) {
         if (outIndex[i] != std::numeric_limits<uint32_t>::max()) inputOf[outIndex[i]] = i;
     }
+    region.interiorTexcoord.clear();
     const auto addInterior = [&](uint32_t out) {
         region.interiorPos.push_back(local.vertexLocations[out]);
         region.interiorUv.push_back(inputOf[out] >= 0 ? region.uv[inputOf[out]] : V2(0, 0));
+        if (hasTexcoords_) region.interiorTexcoord.push_back(texcoordAt(region, local.vertexLocations[out]));
         return -static_cast<int>(region.interiorPos.size());
     };
     for (const auto& t : local.triIndexes) {
@@ -389,6 +394,7 @@ void RegionResampler::keepOriginal(Region& region) const
     region.triangles.clear();
     region.interiorUv.clear();
     region.interiorPos.clear();
+    region.interiorTexcoord.clear();
     std::vector<int> interiorIndex(region.uv.size(), -1);
     for (const Tri& t : region.faces) {
         Tri o;
@@ -401,6 +407,7 @@ void RegionResampler::keepOriginal(Region& region) const
                     interiorIndex[v] = static_cast<int>(region.interiorUv.size());
                     region.interiorUv.push_back(region.uv[v]);
                     region.interiorPos.push_back(positions_[region.meshId[v]]);
+                    if (hasTexcoords_) region.interiorTexcoord.push_back(region.texcoord[v]);
                 }
                 o[k] = -(interiorIndex[v] + 1);
             }
@@ -495,8 +502,7 @@ void RegionResampler::triangulate()
                 if (region.mirrored) std::swap(o[1], o[2]);
                 region.triangles.push_back(o);
             }
-        } catch (const std::exception& e) {
-            Report(e, r);
+        } catch (const std::exception&) {
             needsDecimation[r] = 1;
         }
     }
@@ -524,6 +530,7 @@ void RegionResampler::lift()
         if (region.decimated) continue;
         region.interiorPos.clear();
         region.interiorPos.reserve(region.interiorUv.size());
+        region.interiorTexcoord.clear();
         const TriangleGrid2D locator(region.uv, region.faces);
         for (const V2& p : region.interiorUv) {
             int tri;
@@ -533,12 +540,18 @@ void RegionResampler::lift()
                 region.interiorPos.push_back(float(bary[0]) * positions_[region.meshId[f[0]]] +
                                              float(bary[1]) * positions_[region.meshId[f[1]]] +
                                              float(bary[2]) * positions_[region.meshId[f[2]]]);
+                if (hasTexcoords_) {
+                    region.interiorTexcoord.push_back(float(bary[0]) * region.texcoord[f[0]] +
+                                                      float(bary[1]) * region.texcoord[f[1]] +
+                                                      float(bary[2]) * region.texcoord[f[2]]);
+                }
             } else {
                 size_t nearest = 0;
                 for (size_t i = 1; i < region.uv.size(); i++) {
                     if ((region.uv[i] - p).squaredNorm() < (region.uv[nearest] - p).squaredNorm()) nearest = i;
                 }
                 region.interiorPos.push_back(positions_[region.meshId[nearest]]);
+                if (hasTexcoords_) region.interiorTexcoord.push_back(region.texcoord[nearest]);
             }
         }
         // Triangles that face against the surface under them: the
@@ -552,8 +565,34 @@ void RegionResampler::lift()
         region.triangles.clear();
         region.interiorUv.clear();
         region.interiorPos.clear();
+        region.interiorTexcoord.clear();
         if (!decimate(region)) keepOriginal(region);
     }
+}
+
+Vector2f RegionResampler::texcoordAt(const Region& region, const Vector3f& p) const
+{
+    float best = std::numeric_limits<float>::max();
+    Vector2f uv = Vector2f::Zero();
+    for (const Tri& t : region.faces) {
+        const Vector3f a = positions_[region.meshId[t[0]]], b = positions_[region.meshId[t[1]]],
+                       c = positions_[region.meshId[t[2]]];
+        Vector3f closest;
+        const float d = DistanceToTriangleSqr(p, a, b, c, &closest);
+        if (d >= best) continue;
+        best = d;
+        // Barycentrics of the closest point (it lies in the triangle).
+        const Vector3f n = (b - a).cross(c - a);
+        const float area = n.squaredNorm();
+        if (!(area > 0.0f)) {
+            uv = region.texcoord[t[0]];
+            continue;
+        }
+        const float wb = (closest - a).cross(c - a).dot(n) / area;
+        const float wc = (b - a).cross(closest - a).dot(n) / area;
+        uv = (1.0f - wb - wc) * region.texcoord[t[0]] + wb * region.texcoord[t[1]] + wc * region.texcoord[t[2]];
+    }
+    return uv;
 }
 
 bool RegionResampler::liftFoldsOver(const Region& region) const
@@ -598,7 +637,9 @@ void RegionResampler::project(const SurfaceProjector& projector)
 ResampledSurface RegionResampler::reconstitute() const
 {
     // Weld the regions back into one mesh: regions share their boundary
-    // vertices (the same cut-mesh vertex), interiors are their own.
+    // vertices (the same cut-mesh vertex), interiors are their own. A shared
+    // vertex can have a different texture coordinate in each region (a texture
+    // seam), so those stay with the triangle corners.
     ResampledSurface surface;
     std::unordered_map<uint32_t, uint32_t> boundaryOut;
     for (int r = 0; r < static_cast<int>(regions_.size()); r++) {
@@ -611,12 +652,10 @@ ResampledSurface RegionResampler::reconstitute() const
             if (inserted) {
                 surface.mesh.vertexLocations.push_back(positions_[meshId]);
                 surface.vertexRegion.push_back(-1);
-                surface.resampled.push_back(0);
             }
             bIndex[b] = it->second;
         }
-        // Interior vertices that some triangle uses (a removed seam ear can
-        // leave its vertex unused).
+        // Interior vertices that some triangle uses.
         std::vector<uint32_t> interiorOut(region.interiorPos.size(), std::numeric_limits<uint32_t>::max());
         for (const Tri& t : region.triangles) {
             for (int c : t) {
@@ -628,27 +667,19 @@ ResampledSurface RegionResampler::reconstitute() const
             interiorOut[i] = static_cast<uint32_t>(surface.mesh.vertexLocations.size());
             surface.mesh.vertexLocations.push_back(region.interiorPos[i]);
             surface.vertexRegion.push_back(r);
-            surface.resampled.push_back(region.failed ? 0 : 1);
         }
         const auto map = [&](int c) { return c >= 0 ? bIndex[c] : interiorOut[-c - 1]; };
-        // UV of a corner in the region's layout.
-        const auto uvOf = [&](int c) {
-            const V2 p = c >= 0 ? V2(region.seeds[c].x(), region.seeds[c].y()) : region.interiorUv[-c - 1];
-            return Vector2f(static_cast<float>(p.x()), static_cast<float>(p.y()));
+        const auto texcoordOf = [&](int c) {
+            return c >= 0 ? region.texcoord[region.boundaryLocal[c]] : region.interiorTexcoord[-c - 1];
         };
         for (const Tri& t : region.triangles) {
             surface.mesh.triIndexes.push_back(Vector3u(map(t[0]), map(t[1]), map(t[2])));
             surface.faceRegion.push_back(r);
-            for (int c : t) surface.mesh.textureMap.push_back(uvOf(c));
+            if (hasTexcoords_) {
+                for (int c : t) surface.mesh.texcoords.push_back(texcoordOf(c));
+            }
         }
-        surface.originalInterior += region.originalInterior;
-        for (uint32_t o : interiorOut) surface.resampledInterior += o != std::numeric_limits<uint32_t>::max();
-        surface.foldedRegions += region.folded;
-        surface.decimatedRegions += region.decimated;
-        surface.liftFoldedRegions += region.liftFolded;
-        surface.failedRegions += region.failed;
     }
-    surface.boundaryVertices = static_cast<int>(boundaryOut.size());
     // Normals with the input's sign convention, compared at kept boundary
     // vertices, which still have the input's normals.
     surface.mesh.updateVertexNormals();
@@ -662,60 +693,5 @@ ResampledSurface RegionResampler::reconstitute() const
             surface.mesh.updateVertexNormals(true);
         }
     }
-    // Every edge used once in each direction: the regions fit back together.
-    std::unordered_map<uint64_t, int> directed;
-    directed.reserve(surface.mesh.triIndexes.size() * 3);
-    for (const auto& t : surface.mesh.triIndexes) {
-        const uint32_t v[3] = {t.x(), t.y(), t.z()};
-        for (int k = 0; k < 3; k++) directed[(uint64_t(v[k]) << 32) | v[(k + 1) % 3]]++;
-    }
-    for (const auto& [e, uses] : directed) {
-        const auto reverse = directed.find((e << 32) | (e >> 32));
-        if (uses != 1 || reverse == directed.end() || reverse->second != 1) surface.openEdges++;
-    }
-    // Redundant triangles: the same three vertices twice (a pair with opposite
-    // windings would still pass the edge test above), or degenerate ones.
-    {
-        std::unordered_set<uint64_t> seen;
-        seen.reserve(surface.mesh.triIndexes.size());
-        double meanArea = 0.0;
-        std::vector<double> areas(surface.mesh.triIndexes.size());
-        for (size_t f = 0; f < surface.mesh.triIndexes.size(); f++) {
-            const Vector3u t = surface.mesh.triIndexes[f];
-            const Vector3f a = surface.mesh.vertexLocations[t.x()];
-            areas[f] =
-                0.5 * ((surface.mesh.vertexLocations[t.y()] - a).cross(surface.mesh.vertexLocations[t.z()] - a)).norm();
-            meanArea += areas[f];
-        }
-        meanArea /= std::max<size_t>(1, areas.size());
-        for (size_t f = 0; f < surface.mesh.triIndexes.size(); f++) {
-            const Vector3u t = surface.mesh.triIndexes[f];
-            uint32_t v[3] = {t.x(), t.y(), t.z()};
-            std::sort(v, v + 3);
-            if (v[0] == v[1] || v[1] == v[2] || !(areas[f] > 1e-9 * meanArea)) surface.degenerateTriangles++;
-            // 21 bits per index is enough for these meshes; collisions only
-            // over-report.
-            const uint64_t key = (uint64_t(v[0]) << 42) | (uint64_t(v[1] & 0x1FFFFF) << 21) | (v[2] & 0x1FFFFF);
-            if (!seen.insert(key).second) surface.duplicateTriangles++;
-        }
-    }
-    {
-        size_t undirectedEdges = 0;
-        for (const auto& [e, uses] : directed) undirectedEdges += (e >> 32) < (e & 0xffffffffu) ? 1 : 0;
-        // Edges whose reverse is missing count once more.
-        for (const auto& [e, uses] : directed) {
-            if ((e >> 32) > (e & 0xffffffffu) && !directed.count((e << 32) | (e >> 32))) undirectedEdges++;
-        }
-        surface.eulerCharacteristic = static_cast<long long>(surface.mesh.vertexLocations.size()) -
-                                      static_cast<long long>(undirectedEdges) +
-                                      static_cast<long long>(surface.mesh.triIndexes.size());
-    }
-    std::cout << "Reconstituted " << regions_.size() << " regions: interior " << surface.originalInterior << " -> "
-              << surface.resampledInterior << " vertices, " << surface.boundaryVertices << " boundary kept; "
-              << surface.foldedRegions << " folded, " << surface.liftFoldedRegions << " folded in 3D, "
-              << surface.decimatedRegions << " decimated, " << surface.failedRegions << " kept original triangles; "
-              << surface.openEdges << " unmatched edges, " << surface.duplicateTriangles << " duplicate and "
-              << surface.degenerateTriangles << " degenerate triangles; V-E+F = " << surface.eulerCharacteristic
-              << '\n';
     return surface;
 }

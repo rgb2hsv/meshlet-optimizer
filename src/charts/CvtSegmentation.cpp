@@ -6,7 +6,6 @@
 #include <charts/CvtSegmentation.hpp>
 #include <core/Check.hpp>
 #include <core/Types.hpp>
-#include <iostream>
 
 #include <LBFGS.h>
 
@@ -250,10 +249,6 @@ Contribution IntegratePolygon(const ClipPolygon& poly, const V3d& s, int seed)
     return c;
 }
 
-bool Report(const CvtSegmentation::StatusHandler& handler, const std::string& status, float progress)
-{
-    return handler ? handler(status, progress) : true;
-}
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -510,12 +505,10 @@ double CvtSegmentation::optimizeLBFGS(std::vector<V3d>& seeds, int maxIterations
     LBFGSpp::LBFGSSolver<double> solver(param);
     double fx = 0.0;
     try {
-        const int iterations = solver.minimize(energy, y, fx);
-        std::cout << "CVT L-BFGS: " << iterations << " iterations, energy " << f0 << " -> " << bestF * f0 << '\n';
-    } catch (const std::exception& e) {
+        solver.minimize(energy, y, fx);
+    } catch (const std::exception&) {
         // Line-search failures happen near the optimum where the energy is
         // flat to machine precision; the best point seen is kept.
-        std::cout << "CVT L-BFGS stopped: " << e.what() << ", energy " << f0 << " -> " << bestF * f0 << '\n';
     }
     for (int i = 0; i < n; i++) seeds[i] = bestY.segment<3>(3 * i) * scale;
     return bestF * f0;
@@ -638,11 +631,8 @@ int CvtSegmentation::labelVertices(const std::vector<V3d>& seeds, int minChartVe
     return count;
 }
 
-int CvtSegmentation::solve(const CvtSegmentationParams& params, std::vector<int>& vertexLabels,
-                           const StatusHandler& statusHandler)
+int CvtSegmentation::solve(const CvtSegmentationParams& params, std::vector<int>& vertexLabels)
 {
-    energyHistory_.clear();
-    seeds_.clear();
     if (triangles_.empty() || area_ <= 0.0) {
         vertexLabels.assign(positions_.size(), 0);
         return positions_.empty() ? 0 : 1;
@@ -661,8 +651,6 @@ int CvtSegmentation::solve(const CvtSegmentationParams& params, std::vector<int>
     if (spacing <= 0.0) spacing = spacingForSeedCount(seedCount);
     const double minSpacing = params.minSpacingInEdgeLengths * averageEdge_;
     if (spacing < minSpacing) {
-        std::cout << "CVT spacing " << spacing << " is below " << params.minSpacingInEdgeLengths
-                  << " average edge lengths; using " << minSpacing << '\n';
         spacing = minSpacing;
         seedCount = 0;
     }
@@ -674,31 +662,17 @@ int CvtSegmentation::solve(const CvtSegmentationParams& params, std::vector<int>
     // radius is shrunk to make room for roughly the requested number of seeds.
     const double radius = 0.8 * spacing;
     const int candidates = std::max(1, params.candidatesPerSeed) * seedCount;
-    Report(statusHandler, "CVT blue-noise sampling", 0.0f);
     std::vector<V3d> seeds = sampleBlueNoise(radius, seedCount, candidates, params.randomSeed);
-    std::cout << "CVT seeds: " << seeds.size() << " / " << seedCount << " requested, spacing " << spacing
-              << ", average edge " << averageEdge_ << '\n';
 
-    const int totalSteps = std::max(1, params.lloydIterations + 1);
-    for (int k = 0; k < params.lloydIterations; k++) {
-        if (!Report(statusHandler, "CVT Lloyd iteration", float(k) / totalSteps)) break;
-        energyHistory_.push_back(lloydStep(seeds));
-    }
-    if (params.lbfgsIterations > 0 && Report(statusHandler, "CVT L-BFGS", float(params.lloydIterations) / totalSteps)) {
-        energyHistory_.push_back(
-            optimizeLBFGS(seeds, params.lbfgsIterations, params.lbfgsHistory, params.relativeTolerance));
-    } else {
-        energyHistory_.push_back(restrictedVoronoi(seeds).totalEnergy);
+    for (int k = 0; k < params.lloydIterations; k++) lloydStep(seeds);
+    if (params.lbfgsIterations > 0) {
+        optimizeLBFGS(seeds, params.lbfgsIterations, params.lbfgsHistory, params.relativeTolerance);
     }
 
-    Report(statusHandler, "CVT labeling", 1.0f);
     int count = labelVertices(seeds, params.minChartVertices, vertexLabels);
     if (params.regularize) {
-        Report(statusHandler, "CVT label regularization", 1.0f);
         const LabelGraph graph(positions_, triangles_);
         count = graph.regularize(vertexLabels, params.regularization);
     }
-    seeds_ = std::move(seeds);
-    std::cout << "CVT charts: " << count << '\n';
     return count;
 }

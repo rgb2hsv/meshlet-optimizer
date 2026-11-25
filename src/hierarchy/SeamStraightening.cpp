@@ -103,21 +103,6 @@ public:
         return edgeLength(u, v) * (1.0f + static_cast<float>(bisectorWeight_) * bisectorDistance(ra, rb, u, v));
     }
 
-    // Length-weighted mean distance (in mean edge lengths) of the border
-    // edges from the bisectors of the regions they separate.
-    double meanBisectorDistance() const
-    {
-        double sum = 0.0, total = 0.0;
-        for (const auto& [key, faces] : edgeFaces_) {
-            if (!isBorderEdge(key)) continue;
-            const uint32_t u = static_cast<uint32_t>(key >> 32), v = static_cast<uint32_t>(key & 0xffffffffu);
-            const double len = edgeLength(u, v);
-            sum += len * bisectorDistance(label_[faces[0]], label_[faces[1]], u, v);
-            total += len;
-        }
-        return total > 0 ? sum / total : 0.0;
-    }
-
     float edgeLength(uint32_t a, uint32_t b) const
     {
         return (mesh_.vertexLocations[a] - mesh_.vertexLocations[b]).norm();
@@ -352,17 +337,6 @@ public:
         return moved;
     }
 
-    double borderLength() const
-    {
-        double length = 0.0;
-        for (const auto& [key, faces] : edgeFaces_) {
-            if (isBorderEdge(key)) {
-                length += edgeLength(static_cast<uint32_t>(key >> 32), static_cast<uint32_t>(key & 0xffffffffu));
-            }
-        }
-        return length;
-    }
-
 private:
     long long euler(const std::vector<int>& faces) const
     {
@@ -426,17 +400,18 @@ private:
 };
 }  // namespace
 
-SeamStraighteningStats mopt::StraightenRegionSeams(const Mesh& mesh, std::vector<int>& faceRegion,
-                                                   const SeamStraighteningParams& params)
+void mopt::StraightenRegionSeams(const Mesh& mesh, std::vector<int>& faceRegion, const SeamStraighteningParams& params,
+                                 const std::vector<int>& regionIsland)
 {
-    SeamStraighteningStats stats;
-    if (mesh.triIndexes.empty() || faceRegion.size() != mesh.triIndexes.size()) return stats;
+    if (mesh.triIndexes.empty() || faceRegion.size() != mesh.triIndexes.size()) return;
     Seams seams(mesh, faceRegion, std::max(0.0, params.bisectorWeight));
-    const std::vector<Chain> chains = seams.traceChains(stats.loops, stats.lengthBefore);
-    stats.bisectorDistanceBefore = seams.meanBisectorDistance();
-    stats.chains = static_cast<int>(chains.size());
+    int loops = 0;
+    double length = 0.0;
+    const std::vector<Chain> chains = seams.traceChains(loops, length);
     for (const Chain& chain : chains) {
         if (chain.vertices.front() == chain.vertices.back() || chain.vertices.size() < 3) continue;
+        // A seam between two UV islands is a texture seam: it stays where it is.
+        if (!regionIsland.empty() && regionIsland[chain.a] != regionIsland[chain.b]) continue;
         float oldCost = 0.0f;
         for (size_t i = 0; i + 1 < chain.vertices.size(); i++) {
             oldCost += seams.edgeCost(chain.a, chain.b, chain.vertices[i], chain.vertices[i + 1]);
@@ -444,15 +419,6 @@ SeamStraighteningStats mopt::StraightenRegionSeams(const Mesh& mesh, std::vector
         float pathCost = 0.0f;
         const std::vector<uint32_t> path = seams.shortestPath(chain, pathCost);
         if (path.empty() || pathCost >= oldCost * (1.0f - 1e-5f)) continue;  // already the cheapest
-        const int moved = seams.replace(chain, path);
-        if (moved < 0) {
-            stats.rejected++;
-        } else if (moved > 0) {
-            stats.straightened++;
-            stats.facesMoved += moved;
-        }
+        seams.replace(chain, path);
     }
-    stats.lengthAfter = seams.borderLength();
-    stats.bisectorDistanceAfter = seams.meanBisectorDistance();
-    return stats;
 }

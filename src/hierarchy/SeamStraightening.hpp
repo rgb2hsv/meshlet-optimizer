@@ -47,23 +47,9 @@ struct SeamStraighteningParams {
     double bisectorWeight = 2.0;
 };
 
-// What the seam straightening did: chains straightened or rejected, faces moved, border length.
-struct SeamStraighteningStats {
-    int chains = 0;             // junction-to-junction chains
-    int straightened = 0;       // replaced by a shorter path
-    int rejected = 0;           // a shorter path existed but broke a region
-    int loops = 0;              // closed border loops, left as they are
-    int facesMoved = 0;         // faces that changed region
-    double lengthBefore = 0.0;  // total border length
-    double lengthAfter = 0.0;
-    // Length-weighted mean distance of the borders from the bisectors of the
-    // regions they separate, in mean edge lengths.
-    double bisectorDistanceBefore = 0.0;
-    double bisectorDistanceAfter = 0.0;
-};
-
 // faceRegion: one region id per face (>= 0), updated in place.
-SeamStraighteningStats StraightenRegionSeams(const Mesh& mesh, std::vector<int>& faceRegion,
-                                             const SeamStraighteningParams& params = {});
+// regionIsland (optional): the UV island of each region; seams between regions of different islands are kept.
+void StraightenRegionSeams(const Mesh& mesh, std::vector<int>& faceRegion, const SeamStraighteningParams& params = {},
+                           const std::vector<int>& regionIsland = {});
 
 }  // namespace mopt

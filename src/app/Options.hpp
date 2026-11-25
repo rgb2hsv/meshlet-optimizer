@@ -1,6 +1,7 @@
 #pragma once
 // Command-line options of meshlet-optimizer.
-#include <hierarchy/HierarchySteps.hpp>
+
+#include <hierarchy/MeshletBuilder.hpp>
 
 #include <filesystem>
 #include <optional>
@@ -13,10 +14,11 @@ struct Options {
     std::filesystem::path input;   // .ply
     std::filesystem::path output;  // .mlod
     bool project = true;           // new vertices onto the input surface
-    bool check = false;            // fail unless the file was written and the levels are crack-free
+    bool check = false;            // fail unless the file was written (and, with checkCracks, no levels crack)
+    bool checkCracks = false;      // check every pair of levels for cracks before writing
     bool quiet = false;
     int threads = 0;  // 0: OpenMP default
-    HierarchyParams hierarchy;
+    MeshletParams hierarchy;
 };
 
 // Parses argv into options. Returns an exit code to stop with (help, version or a usage error, already
