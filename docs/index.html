@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>meshlet-optimizer — Nested Chart Hierarchies for Meshlet LOD</title>
+<meta name="description" content="meshlet-optimizer builds crack-free meshlet level-of-detail hierarchies from nested chart hierarchies: restricted CVT base charts, clique merging, LSCM flattening, per-region remeshing and nested region borders, exported as .mlod files for meshlet-viewer.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<button class="menu-toggle" aria-label="Toggle navigation" aria-expanded="false">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+</button>
+<div class="scrim"></div>
+
+<aside class="sidebar">
+  <div class="brand">
+    <a href="#top"><span class="name">meshlet-optimizer</span><span class="tag">Nested chart hierarchies for meshlet LOD</span></a>
+  </div>
+  <nav class="toc" aria-label="Table of contents">
+    <ol>
+      <li><a href="#top">Abstract</a></li>
+      <li><a href="#introduction"><span class="num">1</span>Introduction</a></li>
+      <li><a href="#background"><span class="num">2</span>Background</a>
+        <ol>
+          <li><a href="#bg-meshlets"><span class="num">2.1</span>Meshlets and cluster LOD</a></li>
+          <li><a href="#bg-cvt"><span class="num">2.2</span>Centroidal Voronoi tessellations</a></li>
+          <li><a href="#bg-lscm"><span class="num">2.3</span>Conformal flattening</a></li>
+          <li><a href="#bg-related"><span class="num">2.4</span>Related work</a></li>
+        </ol>
+      </li>
+      <li><a href="#method"><span class="num">3</span>Method</a>
+        <ol>
+          <li><a href="#m-overview"><span class="num">3.1</span>Overview</a></li>
+          <li><a href="#m-invariant"><span class="num">3.2</span>The nesting invariant</a></li>
+          <li><a href="#m-charts"><span class="num">3.3</span>Base charts</a></li>
+          <li><a href="#m-base"><span class="num">3.4</span>Level 0 and seam straightening</a></li>
+          <li><a href="#m-cluster"><span class="num">3.5</span>Clustering regions</a></li>
+          <li><a href="#m-flatten"><span class="num">3.6</span>Flattening</a></li>
+          <li><a href="#m-remesh"><span class="num">3.7</span>Remeshing a region</a></li>
+          <li><a href="#m-split"><span class="num">3.8</span>Splitting large regions</a></li>
+          <li><a href="#m-borders"><span class="num">3.9</span>Nested border simplification</a></li>
+          <li><a href="#m-relax"><span class="num">3.10</span>Flat triangles and border relaxation</a></li>
+          <li><a href="#m-uv"><span class="num">3.11</span>Texture coordinates</a></li>
+          <li><a href="#m-export"><span class="num">3.12</span>Export to the meshlet DAG</a></li>
+        </ol>
+      </li>
+      <li><a href="#results"><span class="num">4</span>Results</a>
+        <ol>
+          <li><a href="#r-setup"><span class="num">4.1</span>Setup</a></li>
+          <li><a href="#r-levels"><span class="num">4.2</span>Level structure</a></li>
+          <li><a href="#r-time"><span class="num">4.3</span>Running time</a></li>
+          <li><a href="#r-uv"><span class="num">4.4</span>Texture fidelity</a></li>
+          <li><a href="#r-atlas"><span class="num">4.5</span>Generated atlases</a></li>
+          <li><a href="#r-validation"><span class="num">4.6</span>Validation</a></li>
+        </ol>
+      </li>
+      <li><a href="#limitations"><span class="num">5</span>Limitations</a></li>
+      <li><a href="#conclusion"><span class="num">6</span>Conclusion</a></li>
+      <li><a href="#references">References</a></li>
+      <li><a href="#appendix">Appendices</a>
+        <ol>
+          <li><a href="#a-build"><span class="num">A</span>Building and running</a></li>
+          <li><a href="#a-options"><span class="num">B</span>Parameters</a></li>
+          <li><a href="#a-format"><span class="num">C</span>The .mlod format</a></li>
+          <li><a href="#a-source"><span class="num">D</span>Source layout</a></li>
+          <li><a href="#a-figures"><span class="num">E</span>Reproducing the figures</a></li>
+        </ol>
+      </li>
+    </ol>
+  </nav>
+  <div class="sidebar-footer"><a href="https://github.com/rgb2hsv/meshlet-optimizer"><svg class="gh-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>View on GitHub</a></div>
+</aside>
+
+<main id="top">
+<div class="content">
+
+<header class="hero">
+  <h1>meshlet-optimizer <span>— Nested Chart Hierarchies for Meshlet LOD</span></h1>
+  <p class="subtitle">Crack-free meshlet level-of-detail DAGs in which every meshlet is a chart, every coarser chart is remeshed inside the borders of the charts it replaces, and texture coordinates survive every level.</p>
+
+  <div class="abstract">
+    <h2 class="abstract-title">Abstract</h2>
+    <p>Cluster-based level of detail renders a mesh as a cut through a directed acyclic graph of small triangle clusters (meshlets), swapping groups of fine clusters for coarser ones as they shrink on screen. The usual construction simplifies each group with its outer border locked, which keeps neighbouring clusters crack-free but leaves the border at full resolution on every level and produces clusters whose shape follows whatever the simplifier left. <strong>meshlet-optimizer</strong> builds the DAG the other way around: it first segments the surface into compact, disk-shaped charts with a restricted centroidal Voronoi tessellation, then merges cliques of adjacent charts level by level into a region hierarchy. Each new region is flattened with least-squares conformal maps and remeshed in the plane with blue noise, a restricted 2D CVT and a constrained Delaunay triangulation, while its border is coarsened by edge collapses whose removed vertices are snapped onto the coarser border on every finer level. Borders are therefore <em>nested</em>: every border of every level lies on the borders of the levels below it, so any mix of levels drawn side by side is crack-free, and borders get coarser along with the interiors. Every region becomes exactly one meshlet, groups are the regions that merge into one parent, and the result is written as a <code>.mlod</code> file that <a href="https://github.com/rgb2hsv/meshlet-viewer">meshlet-viewer</a> renders with mesh shaders. Texture seams are kept as region borders, so UVs are carried through every level; a mesh without UVs instead gets one packed atlas per level. On a 600K-triangle scanned figure the texture sampled at level 4 lies within 1.9 mean edge lengths of the right surface point for 99% of triangles.</p>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><b>1 meshlet</b><span>per region per level</span></div>
+    <div class="stat"><b>0 cracks</b><span>between any two levels (checked)</span></div>
+    <div class="stat"><b>24 s</b><span>metasphere, 132K triangles, 10 levels</span></div>
+    <div class="stat"><b>150 s</b><span>cosplay scan, 600K triangles, 13 levels</span></div>
+  </div>
+  <div class="pills">
+    <span class="pill">C++20</span><span class="pill">OpenMP</span><span class="pill">Eigen</span>
+    <span class="pill">Restricted CVT</span><span class="pill">LSCM</span><span class="pill">Constrained Delaunay</span>
+    <span class="pill">L-BFGS</span><span class="pill">meshoptimizer clusterlod BVH</span><span class="pill">Windows · macOS</span>
+  </div>
+</header>
+
+<section id="introduction">
+<h2><span class="num">1</span>Introduction<a class="anchor" href="#introduction" aria-label="Link to this section"></a></h2>
+
+<p>Mesh-shader pipelines draw geometry as <em>meshlets</em>: clusters of up to a few hundred triangles, each culled and rasterized by one workgroup. Level of detail fits naturally on top of them. Nanite <a href="#ref-karis">[1]</a> and meshoptimizer's <code>clusterlod</code> <a href="#ref-meshopt">[2]</a> partition the clusters of one level into groups, simplify each group as a whole with its outer border locked, and split the result into new, coarser clusters. Because the locked border is shared with the neighbouring groups, any group can be swapped for its simplified version without opening a crack, and a renderer picks, per group, the coarsest version whose projected error is below a pixel threshold.</p>
+
+<p>Locking borders has two costs. Border edges are never simplified within a level, so they accumulate until the next level re-partitions the groups and frees them, and the clusters that come out of a simplifier have whatever shape the collapses left: long, ragged, or with many more triangles than the interior needs. This project explores a construction in which the cluster shape comes first. The surface is segmented into compact charts, charts are merged into a hierarchy of regions, and <strong>each region of each level is one meshlet</strong>. A coarser region is not obtained by simplifying its children but by <em>remeshing</em> them: the region is flattened, sampled with fewer, evenly spread points, triangulated and lifted back onto the surface. Its border is simplified too, but in a way that keeps it on the borders of every finer level, which is what makes levels interchangeable.</p>
+
+<p>The contributions are:</p>
+<ul>
+  <li>a <strong>nesting invariant</strong> on region borders across levels (§<a href="#m-invariant">3.2</a>) that makes every pair of levels crack-free while letting borders coarsen with the interiors, maintained by snapping removed border vertices of every finer level onto the coarser border (§<a href="#m-borders">3.9</a>);</li>
+  <li>a <strong>chart pipeline</strong> for building the levels: restricted-CVT base charts with topological clean-up (§<a href="#m-charts">3.3</a>), clique merging that keeps groups disk-shaped (§<a href="#m-cluster">3.5</a>), one global LSCM solve per level with padded charts (§<a href="#m-flatten">3.6</a>) and planar remeshing with a 3D fallback for folded regions (§<a href="#m-remesh">3.7</a>);</li>
+  <li>a <strong>multi-level border relaxation</strong> that moves a border vertex and all its copies on every level as one variable, minimizing a CVT energy summed over the levels (§<a href="#m-relax">3.10</a>);</li>
+  <li><strong>texture-aware</strong> construction: UV seams are region borders, so texture coordinates are interpolated, never invented, and untextured meshes get a per-level packed atlas (§<a href="#m-uv">3.11</a>);</li>
+  <li>an exact mapping of the hierarchy onto meshoptimizer's cluster DAG and LOD selection BVH, so the output runs in an existing mesh-shader viewer (§<a href="#m-export">3.12</a>).</li>
+</ul>
+
+<p>The program is a command-line tool, <code>meshlet-optimizer model.ply -o model.mlod</code>, built from the mapping pipeline of an earlier toolbox and stripped to what the hierarchy and export need. Section 2 reviews the building blocks, Section 3 describes the method stage by stage, Section 4 measures it on two models, and the appendices document the parameters, the file format and how to reproduce every figure.</p>
+</section>
+
+<section id="background">
+<h2><span class="num">2</span>Background<a class="anchor" href="#background" aria-label="Link to this section"></a></h2>
+
+<h3 id="bg-meshlets"><span class="num">2.1</span>Meshlets and cluster LOD<a class="anchor" href="#bg-meshlets" aria-label="Link to this section"></a></h3>
+<p>A meshlet stores up to <i>V</i> vertex references and <i>T</i> triangles with 8-bit local indices; meshlet-viewer's mesh shader accepts <i>V</i> = <i>T</i> = 256. A cluster LOD hierarchy is a DAG whose nodes are meshlets. Meshlets are organised in <em>groups</em>: a group of depth <i>k</i> is a set of clusters that is replaced, as a unit, by the clusters of its simplified version at depth <i>k</i>+1. Every cluster carries two error bounds: its own error <i>e</i><sub>self</sub> (how far its geometry is from the original surface, with a bounding sphere) and the error <i>e</i><sub>coarse</sub> of the group that would replace it. The renderer draws a cluster exactly when</p>
+<p class="math">project(<i>e</i><sub>self</sub>) ≤ τ &lt; project(<i>e</i><sub>coarse</sub>)</p>
+<p>for a screen-space threshold τ. If errors grow monotonically up the DAG, exactly one version of each part of the surface passes the test, so the selection is a consistent cut. Selection is accelerated with a BVH over the groups, one tree per depth, culled on the GPU; meshlet-viewer uses meshoptimizer's <code>clodBuildHierarchy</code> for it. The cut is crack-free only if every pair of clusters that can be drawn side by side meets along a common border.</p>
+
+<h3 id="bg-cvt"><span class="num">2.2</span>Centroidal Voronoi tessellations<a class="anchor" href="#bg-cvt" aria-label="Link to this section"></a></h3>
+<p>Given sites <i>x</i><sub>1</sub>, …, <i>x</i><sub>n</sub> on a surface <i>S</i>, the restricted Voronoi diagram intersects each 3D Voronoi cell with the surface. A centroidal Voronoi tessellation (CVT) minimizes</p>
+<p class="math">F(X) = Σ<sub>i</sub> ∫<sub>Ω<sub>i</sub> ∩ S</sub> ‖<i>y</i> − <i>x</i><sub>i</sub>‖² d<i>y</i>,&nbsp;&nbsp;&nbsp; ∇<sub><i>x</i><sub>i</sub></sub>F = 2 <i>m</i><sub>i</sub> (<i>x</i><sub>i</sub> − <i>c</i><sub>i</sub>)</p>
+<p>where <i>m</i><sub>i</sub> and <i>c</i><sub>i</sub> are the mass and centroid of cell <i>i</i>. Lloyd's algorithm <a href="#ref-lloyd">[5]</a> moves each site to its centroid; Liu et al. <a href="#ref-liu">[6]</a> showed that quasi-Newton (L-BFGS) minimization of <i>F</i> converges much faster. CVT cells are compact and evenly sized, which makes them good charts and good remeshing samples alike. Yan et al. <a href="#ref-yan">[4]</a> compute the restricted diagram exactly by clipping each triangle against the bisectors of nearby sites.</p>
+
+<h3 id="bg-lscm"><span class="num">2.3</span>Conformal flattening<a class="anchor" href="#bg-lscm" aria-label="Link to this section"></a></h3>
+<p>Least-squares conformal maps (LSCM) <a href="#ref-levy">[3]</a> flatten a disk-shaped chart by asking every triangle to be mapped by a similarity: in complex notation the Cauchy–Riemann equations <i>∂u/∂x = ∂v/∂y</i>, <i>∂u/∂y = −∂v/∂x</i> per triangle, weighted by area, solved in the least-squares sense with two or more vertices pinned. The system is a sparse linear least-squares problem, so all charts of a level can be solved at once. LSCM preserves angles well but can fold a chart with a strongly curved or ragged boundary, which the remeshing stage has to detect.</p>
+
+<h3 id="bg-related"><span class="num">2.4</span>Related work<a class="anchor" href="#bg-related" aria-label="Link to this section"></a></h3>
+<p>Chart-based multiresolution has a long history in texture mapping: Sander et al. <a href="#ref-sander">[8]</a> build charts by greedy merging and parametrize a progressive mesh so that every level shares one atlas, which requires chart borders to survive simplification, a constraint close to our nesting invariant. Variational shape approximation and CVT remeshing <a href="#ref-yan">[4]</a> <a href="#ref-liu">[6]</a> produce compact clusters but no hierarchy. Cluster LOD as used in production <a href="#ref-karis">[1]</a> <a href="#ref-meshopt">[2]</a> gets crack-freedom from locked group borders and rebuilds the partition at every level. Our construction sits between the two: a single region hierarchy fixes the partition for all levels, as in chart-based multiresolution, and the remeshed regions become the clusters of a standard cluster-LOD DAG.</p>
+</section>
+
+<section id="method">
+<h2><span class="num">3</span>Method<a class="anchor" href="#method" aria-label="Link to this section"></a></h2>
+
+<h3 id="m-overview"><span class="num">3.1</span>Overview<a class="anchor" href="#m-overview" aria-label="Link to this section"></a></h3>
+<p>All stages live in one class, <code>MeshletBuilder</code>, and run in the order of Figure 1. The base charts become level 0. Each pass of the level loop clusters the top level's regions into groups, cuts the previous level's surface along the groups, flattens and remeshes every group into one region of the new level, splits regions that came out too large and coarsens the new level's borders. When the loop stops, flat triangles left by snapping are repaired, border vertices are relaxed on all levels at once, atlases are built when the input had no UVs, and everything is written as one <code>.mlod</code>.</p>
+
+<figure class="diagram" id="fig-pipeline">
+<svg viewBox="0 0 880 300" role="img" aria-label="Pipeline diagram">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#6e7681"/></marker></defs>
+  <g font-size="13">
+    <rect class="box" x="16" y="28" width="132" height="58" rx="8"/>
+    <text x="82" y="52" text-anchor="middle" font-weight="600">Input mesh</text>
+    <text x="82" y="71" text-anchor="middle" class="muted" font-size="11.5">PLY, optional UVs</text>
+    <rect class="box" x="176" y="28" width="150" height="58" rx="8"/>
+    <text x="251" y="52" text-anchor="middle" font-weight="600">Base charts</text>
+    <text x="251" y="71" text-anchor="middle" class="muted" font-size="11.5">RCVT · regularize · §3.3</text>
+    <rect class="box" x="354" y="28" width="150" height="58" rx="8"/>
+    <text x="429" y="52" text-anchor="middle" font-weight="600">Level 0</text>
+    <text x="429" y="71" text-anchor="middle" class="muted" font-size="11.5">faces · seams · §3.4</text>
+    <path class="arrow" d="M148 57H174" marker-end="url(#ah)"/>
+    <path class="arrow" d="M326 57H352" marker-end="url(#ah)"/>
+
+    <rect class="box loop" x="16" y="122" width="848" height="92" rx="10" fill="none"/>
+    <text x="30" y="141" class="accent" font-size="12" font-weight="600">LEVEL LOOP · until ≤ stop-at-regions regions or no coarser</text>
+    <g font-size="12">
+      <rect class="box" x="30" y="152" width="96" height="48" rx="7"/><text x="78" y="172" text-anchor="middle" font-weight="600">Cluster</text><text x="78" y="189" text-anchor="middle" class="muted" font-size="11">cliques · §3.5</text>
+      <rect class="box" x="134" y="152" width="78" height="48" rx="7"/><text x="173" y="172" text-anchor="middle" font-weight="600">Cut</text><text x="173" y="189" text-anchor="middle" class="muted" font-size="11">labels</text>
+      <rect class="box" x="220" y="152" width="96" height="48" rx="7"/><text x="268" y="172" text-anchor="middle" font-weight="600">Flatten</text><text x="268" y="189" text-anchor="middle" class="muted" font-size="11">LSCM · §3.6</text>
+      <rect class="box" x="324" y="152" width="96" height="48" rx="7"/><text x="372" y="172" text-anchor="middle" font-weight="600">Sample</text><text x="372" y="189" text-anchor="middle" class="muted" font-size="11">blue noise · CVT</text>
+      <rect class="box" x="428" y="152" width="96" height="48" rx="7"/><text x="476" y="172" text-anchor="middle" font-weight="600">Triangulate</text><text x="476" y="189" text-anchor="middle" class="muted" font-size="11">CDT · §3.7</text>
+      <rect class="box" x="532" y="152" width="96" height="48" rx="7"/><text x="580" y="172" text-anchor="middle" font-weight="600">Lift · project</text><text x="580" y="189" text-anchor="middle" class="muted" font-size="11">weld regions</text>
+      <rect class="box" x="636" y="152" width="78" height="48" rx="7"/><text x="675" y="172" text-anchor="middle" font-weight="600">Split</text><text x="675" y="189" text-anchor="middle" class="muted" font-size="11">§3.8</text>
+      <rect class="box" x="722" y="152" width="130" height="48" rx="7"/><text x="787" y="172" text-anchor="middle" font-weight="600">Borders</text><text x="787" y="189" text-anchor="middle" class="muted" font-size="11">collapse · snap · §3.9</text>
+      <path class="arrow" d="M126 176H132" marker-end="url(#ah)"/><path class="arrow" d="M212 176H218" marker-end="url(#ah)"/>
+      <path class="arrow" d="M316 176H322" marker-end="url(#ah)"/><path class="arrow" d="M420 176H426" marker-end="url(#ah)"/>
+      <path class="arrow" d="M524 176H530" marker-end="url(#ah)"/><path class="arrow" d="M628 176H634" marker-end="url(#ah)"/>
+      <path class="arrow" d="M714 176H720" marker-end="url(#ah)"/>
+    </g>
+    <path class="arrow" d="M429 86V120" marker-end="url(#ah)"/>
+
+    <rect class="box" x="100" y="238" width="150" height="50" rx="8"/>
+    <text x="175" y="259" text-anchor="middle" font-weight="600">Flat triangles</text>
+    <text x="175" y="277" text-anchor="middle" class="muted" font-size="11.5">flip or split · §3.10</text>
+    <rect class="box" x="280" y="238" width="170" height="50" rx="8"/>
+    <text x="365" y="259" text-anchor="middle" font-weight="600">Border relaxation</text>
+    <text x="365" y="277" text-anchor="middle" class="muted" font-size="11.5">all levels, L-BFGS-B</text>
+    <rect class="box" x="480" y="238" width="150" height="50" rx="8"/>
+    <text x="555" y="259" text-anchor="middle" font-weight="600">UV atlases</text>
+    <text x="555" y="277" text-anchor="middle" class="muted" font-size="11.5">no input UVs · §3.11</text>
+    <rect class="box" x="660" y="238" width="150" height="50" rx="8"/>
+    <text x="735" y="259" text-anchor="middle" font-weight="600">Write .mlod</text>
+    <text x="735" y="277" text-anchor="middle" class="muted" font-size="11.5">meshlet DAG · §3.12</text>
+    <path class="arrow" d="M175 214V236" marker-end="url(#ah)"/>
+    <path class="arrow" d="M250 263H278" marker-end="url(#ah)"/><path class="arrow" d="M450 263H478" marker-end="url(#ah)"/>
+    <path class="arrow" d="M630 263H658" marker-end="url(#ah)"/>
+  </g>
+</svg>
+<figcaption><span class="fig">Figure 1.</span> Stages of <code>MeshletBuilder::build</code>. The command line reports each top box with its duration; the level loop is reported once per level.</figcaption>
+</figure>
+
+<pre class="pseudo"><code><span class="k">function</span> <span class="f">Build</span>(<i>M</i>)
+  <i>L</i><sub>0</sub> ← <span class="f">BaseLevel</span>(<span class="f">RestrictedCvtCharts</span>(<i>M</i>))         <span class="c">// regions = charts, faces of M</span>
+  <span class="k">while</span> |regions(<i>L</i><sub>k</sub>)| &gt; stop <span class="k">and</span> <i>L</i><sub>k</sub> coarser than <i>L</i><sub>k−1</sub>
+    <i>G</i> ← <span class="f">CliqueGroups</span>(regions(<i>L</i><sub>k</sub>))                  <span class="c">// disk-shaped, never across UV islands</span>
+    <span class="k">for each</span> group <i>g</i> ∈ <i>G</i> <span class="k">in parallel</span>
+      <i>uv</i> ← <span class="f">Lscm</span>(faces of <i>L</i><sub>k</sub> in <i>g</i>, padded)               <span class="c">// one sparse solve for all groups</span>
+      <i>P</i> ← <span class="f">BlueNoise</span>(<i>uv</i>, 0.35 · interior(<i>g</i>)) ; <span class="f">Lloyd2D</span>(<i>P</i>)
+      <i>T</i> ← <span class="f">ConstrainedDelaunay</span>(border(<i>g</i>) ∪ <i>P</i>)             <span class="c">// border vertices kept exactly</span>
+      region(<i>g</i>) ← <span class="f">Project</span>(<span class="f">Lift</span>(<i>T</i>, <i>uv</i>), <i>M</i>)
+    <i>L</i><sub>k+1</sub> ← <span class="f">Weld</span>(regions) ; <span class="f">SplitLarge</span>(<i>L</i><sub>k+1</sub>)
+    <span class="f">SimplifyBorders</span>(<i>L</i><sub>k+1</sub>, snap copies on <i>L</i><sub>0</sub> … <i>L</i><sub>k</sub>)
+  <span class="f">FixFlatTriangles</span>(<i>L</i><sub>*</sub>) ; <span class="f">RelaxBorders</span>(<i>L</i><sub>*</sub>) ; <span class="f">UvAtlases</span>(<i>L</i><sub>*</sub>)
+  <span class="k">return</span> <span class="f">MeshletDag</span>(<i>L</i><sub>*</sub>)</code></pre>
+
+<h3 id="m-invariant"><span class="num">3.2</span>The nesting invariant<a class="anchor" href="#m-invariant" aria-label="Link to this section"></a></h3>
+<p>Let <i>B</i><sub>k</sub> be the union of region-border edges of level <i>k</i>, and let level <i>k</i>+1's regions be unions of level <i>k</i>'s regions (through the hierarchy). The builder maintains, for every <i>i</i> &lt; <i>k</i>:</p>
+<div class="callout">
+<p><strong>Nesting.</strong> (a) Every vertex of <i>B</i><sub>i</sub> that lies on an edge between two different level-<i>k</i> units lies on <i>B</i><sub>k</sub>; (b) every vertex of <i>B</i><sub>k</sub> lying on such a border of level <i>i</i> is also a vertex of <i>B</i><sub>i</sub>, at exactly the same position.</p>
+</div>
+<p>(b) says coarse borders introduce no new vertices, so a coarse region never has a vertex in the middle of a fine neighbour's edge (no T-junction from the coarse side). (a) says fine border vertices that the coarse border dropped still lie on the coarse border's edges. When the renderer draws a level-<i>k</i> region next to level-<i>i</i> regions, the shared boundary consists of the same polyline, possibly with extra collinear vertices on the fine side, so there is no gap. The invariant is established for free when borders are never simplified (the borders of a level are then subsets of mesh edges of every level below), and maintained under simplification by moving every dropped vertex's copies on finer levels onto the new coarse edge (§<a href="#m-borders">3.9</a>). <code>--check-cracks</code> verifies it for every pair of levels before writing (<code>LevelCracks</code>, tolerance 10<sup>−4</sup> of the mean border edge length).</p>
+
+<h3 id="m-charts"><span class="num">3.3</span>Base charts<a class="anchor" href="#m-charts" aria-label="Link to this section"></a></h3>
+<p>The base charts are the leaves of the hierarchy and the meshlets of level 0, so they should be compact, roughly equal in size, disk-shaped and below the meshlet ceiling. <code>CvtSegmentation</code> computes them as a restricted CVT:</p>
+<ol class="steps">
+  <li><strong>Seeds.</strong> The seed count is <i>n</i> = ⌈|<i>F</i>| / (0.375 · <i>T</i><sub>max</sub>)⌉ with <i>T</i><sub>max</sub> = <code>--chart-triangles</code> (256): charts aim at half the limit, since triangles on chart borders count toward both sides and an explicit cap handles the rest. Seeds are dart-thrown as Poisson-disk blue noise on the surface with radius 0.8 times the hexagonal-packing spacing of <i>n</i> points, on a spatial hash grid.</li>
+  <li><strong>Exact restricted Voronoi cells.</strong> Each triangle is clipped against the bisector planes of the seeds whose cells reach it, starting at the seed nearest its centroid and propagating across clipped edges; a security radius (twice the cell radius) ends clipping without a Delaunay triangulation <a href="#ref-yan">[4]</a>. Triangles are processed in fixed chunks whose contributions are summed in chunk order, so the result does not depend on the thread count.</li>
+  <li><strong>Optimization.</strong> Four Lloyd iterations, then up to 40 L-BFGS iterations on <i>F</i> with the analytic gradient of §2.2, in units of the seed spacing.</li>
+  <li><strong>Labels.</strong> Each vertex takes its nearest seed; fragments that are not the largest piece of their cell and charts under 16 vertices are absorbed by neighbours.</li>
+  <li><strong>Regularization</strong> (<code>LabelGraph</code>): a morphological <em>opening</em> (erode two rings, regrow cores as a geodesic Voronoi diagram) removes thin tails and band charts; <em>region competition</em> moves boundary vertices to the neighbouring chart that lowers a compactness + normal + smoothness cost, only when the vertex is <em>simple</em> (its one-ring meets both charts in single arcs), so chart topology never changes; charts whose Euler characteristic <i>V</i> − <i>E</i> + <i>F</i> ≠ 1 are cut in two from their two farthest vertices until they are disks; finally charts touching more than <i>T</i><sub>max</sub> triangles are cut the same way.</li>
+</ol>
+
+<h3 id="m-base"><span class="num">3.4</span>Level 0 and seam straightening<a class="anchor" href="#m-base" aria-label="Link to this section"></a></h3>
+<p>The vertex labels become face regions: each face joins the chart holding most of its corners. From here on regions are sets of faces, so every border runs along mesh edges and level 0 adds no vertices. Faces with no edge neighbour in their own region join the smallest neighbouring region. With texture coordinates, regions are further split along UV seams into edge-connected pieces (§<a href="#m-uv">3.11</a>).</p>
+<p>CVT labels give jagged staircase borders on the mesh. <code>StraightenRegionSeams</code> breaks the borders into <em>chains</em> between junctions (vertices where three or more regions meet, or the mesh border) and replaces each chain by the cheapest edge path between its junctions through the two regions' faces. An edge costs its length, stretched by its distance from the bisector plane of the two regions' centroids (weight 2), so straightened seams stay where the Voronoi border would be instead of merely becoming short. A chain is replaced only when both regions keep their piece count and topology and no junction appears or disappears.</p>
+
+<figure id="fig-cvt">
+  <img src="figures/diagram-cvt.svg" alt="Base charts: seeds, Lloyd iterations and seam straightening" width="1040" height="262" loading="lazy">
+  <figcaption><span class="fig">Figure 2.</span> Base charts (§3.3–3.4) on a small planar example. (a) Blue-noise seeds label every face by its nearest seed. (b) Lloyd iterations move each seed to its cell's centroid, evening out chart sizes; the tool continues with L-BFGS on the CVT energy and computes exact restricted Voronoi cells on the surface. (c) Every border chain between two junctions (white) is replaced by the cheapest edge path near the bisector of its two charts.</figcaption>
+</figure>
+
+<h3 id="m-cluster"><span class="num">3.5</span>Clustering regions<a class="anchor" href="#m-cluster" aria-label="Link to this section"></a></h3>
+<p><code>RegionHierarchy</code> merges the top level's regions into groups. Grouping starts at a random node and spreads breadth-first: the node at the front of the queue seeds a group with the largest clique of ungrouped, mutually adjacent nodes it belongs to (4 if possible, then 3, 2, 1), preferring the lightest clique among equal sizes, and the group's ungrouped neighbours join the queue. A node left alone joins its smallest neighbouring group. Cliques keep groups round: four mutually adjacent charts meet around a common point instead of forming a chain.</p>
+<p>LSCM needs disks, and a group of disks need not be one: it can ring a hole or pinch at a vertex. <code>DiskGroups</code> repairs such groups by <em>closing</em> (holes the group surrounds, up to half its size, are filled with the regions inside, which is always a union of whole groups) and then <em>ejection</em> (shedding members one at a time, the one whose removal leaves the most disk-like remainder, to a neighbouring group that stays a disk). Adjacency is restricted to regions in the same UV island, so no group crosses a texture seam.</p>
+
+<figure id="fig-cliques">
+  <img src="figures/diagram-cliques.svg" alt="Clique merging of regions into groups" width="1040" height="262" loading="lazy">
+  <figcaption><span class="fig">Figure 3.</span> Clustering (§3.5). (a) Regions and their adjacency graph. (b) Breadth-first from a random region, each region seeds a group with the largest clique of ungrouped, mutually adjacent regions (at most four; on Voronoi-like layouts mostly triangles); a region left alone (red ring) joins its smallest neighbouring group. (c) Each group becomes one region of the next level; its border (thick) is made of the borders of the level below.</figcaption>
+</figure>
+
+<h3 id="m-flatten"><span class="num">3.6</span>Flattening<a class="anchor" href="#m-flatten" aria-label="Link to this section"></a></h3>
+<p>The previous level's surface is cut along the new groups, and every group becomes a <em>mosaic</em>: its faces with their own copy of the boundary vertices. LSCM distorts most at a free boundary, which is exactly where the region's border triangles are, so each mosaic is padded with one ring of its neighbours' triangles (<code>--lscm-padding</code>) that is dropped again after the solve. Each mosaic starts as a projection onto its best-fit plane, which also picks four pinned vertices (the extremes in <i>u</i> and <i>v</i>). All mosaics of the level are then solved in one sparse least-squares system: the normal equations are factored with a simplicial LDL<sup>T</sup> (Eigen), with conjugate gradients as a fallback if the factorization fails. Finally each mosaic's UV area is scaled to its 3D area, so sampling densities in the plane match the surface.</p>
+
+<h3 id="m-remesh"><span class="num">3.7</span>Remeshing a region<a class="anchor" href="#m-remesh" aria-label="Link to this section"></a></h3>
+<p><code>RegionResampler</code> remeshes every region independently (OpenMP over regions):</p>
+<ol class="steps">
+  <li><strong>Fold check.</strong> The region's UV layout is checked with winding numbers: every face must keep the region's orientation and every face centroid must have winding number ±1 with respect to the boundary loops. A folded region skips the planar path and is simplified in 3D by greedy edge collapses (cost: edge length times how far the surrounding faces turn), with a winding-number fold test, to the same vertex budget, boundary locked.</li>
+  <li><strong>Blue noise.</strong> The region keeps every boundary vertex exactly, in 2D and 3D. A fraction <code>--interior-fraction</code> (0.35) of its interior vertex count is drawn as new points by dart throwing over its UV triangles, on a hash grid that already holds the boundary.</li>
+  <li><strong>Restricted 2D CVT.</strong> Ten Lloyd iterations with exact Voronoi cells clipped to the region's UV triangles, boundary vertices acting as fixed generators.</li>
+  <li><strong>Constrained Delaunay triangulation</strong> of boundary and interior points with the boundary edges as constraints and holes removed (the CDT library). A region with <i>B</i> boundary and <i>I</i> interior vertices yields <i>B</i> + 2<i>I</i> − 2 triangles, so any interior fraction down to zero is valid.</li>
+  <li><strong>Lift and project.</strong> New points are lifted by barycentric interpolation in the old UV triangle that contains them (positions, normals and texture coordinates alike); a region where any lifted triangle faces against the surface under it is decimated instead. New interior vertices are then snapped to the closest point of the <em>input</em> surface (a BoxTree from kdtree-cpp), so levels do not drift away from the original as they compound.</li>
+  <li><strong>Weld.</strong> Regions are welded back into one mesh along their shared boundary vertices, which become the new level.</li>
+</ol>
+
+<figure id="fig-remesh">
+  <img src="figures/diagram-remesh.svg" alt="Remeshing one group: border kept, blue noise, CVT, triangulation" width="1040" height="280" loading="lazy">
+  <figcaption><span class="fig">Figure 4.</span> Remeshing one group of Figure 3 (§3.7). (a) Its faces and interior vertices. (b) Border vertices (red) are kept exactly; 35% of the interior count is dart-thrown as blue noise. (c) Ten Lloyd steps of a CVT restricted to the region, border vertices acting as fixed generators. (d) Constrained Delaunay triangulation of border and new points. On a surface the same steps run in the region's LSCM layout and the new points are lifted back to 3D and projected onto the input.</figcaption>
+</figure>
+
+<h3 id="m-split"><span class="num">3.8</span>Splitting large regions<a class="anchor" href="#m-split" aria-label="Link to this section"></a></h3>
+<p>Merging four regions and keeping 35% of their interior vertices does not always shrink the triangle count below the meshlet ceiling, especially when the border is long. Regions above <code>--split-above-faces</code> (256) triangles are split in two by two competing flood fills over face centroids, seeded at a region corner and the face farthest from it; the smaller half always claims the next face, so the halves are connected and balanced. A split cuts through the remeshed interior, not along child borders, so the two halves share their children and the hierarchy records them as one unit (<code>splitFrom</code>): they can only be swapped for their children together.</p>
+
+<h3 id="m-borders"><span class="num">3.9</span>Nested border simplification<a class="anchor" href="#m-borders" aria-label="Link to this section"></a></h3>
+<p>Remeshing coarsens interiors, but a region keeps its children's border vertices, so without further work border edges would stay at level-0 resolution forever and dominate coarse meshlets. <code>SimplifyRegionBorders</code> coarsens each border chain of the level just built until its mean edge length reaches the mean interior edge length of its two regions (<code>--border-target-scale</code>). It repeatedly collapses a chain's shortest edge, moving the non-junction end onto the other end, which keeps its position. A collapse is refused if a remaining triangle would flip, turn more than 60° or vanish, if it breaks the link condition, or if it removes an <em>ear</em> (a face whose other two edges are borders too).</p>
+<p>This is where the nesting invariant is maintained. Before each collapse, every vertex that the merged edge <i>a</i>–<i>b</i> would leave behind is still on the borders of all finer levels (collapses never move kept vertices, so its copies there are at the same position). Its copies are moved to their closest point on <i>a</i>–<i>b</i> and <em>attached</em> to that edge: when an end of the edge moves in a later, coarser collapse, they follow, recursively down the levels. If any of these moves would flip or over-rotate a triangle on any finer level, the collapse is refused. Afterwards every finer border lies on the coarser borders and every coarser border vertex is a finer border vertex, which is the invariant of §<a href="#m-invariant">3.2</a>. The next level is then cut from this simplified surface, so its own borders are made of the simplified ones.</p>
+
+<figure id="fig-borders">
+  <img src="figures/diagram-borders.svg" alt="Nested border simplification with snapping" width="1040" height="168" loading="lazy">
+  <figcaption><span class="fig">Figure 5.</span> Nested border simplification (§3.9). (a) A level-<i>k</i> border chain between two junctions. (b) Level <i>k</i>+1 collapses the chain's shortest edges until they are as long as the regions' interior edges; the copies of every dropped vertex on level <i>k</i> and below move onto the new coarse edge (red). (c) A fine region (top) drawn next to a coarse one (bottom): the fine side has extra vertices, but they lie on the coarse edges, so the two meet without a gap.</figcaption>
+</figure>
+
+<h3 id="m-relax"><span class="num">3.10</span>Flat triangles and border relaxation<a class="anchor" href="#m-relax" aria-label="Link to this section"></a></h3>
+<p>Snapping puts finer border vertices exactly on coarse edges, so three border vertices can become collinear with a degenerate triangle between them. After the loop, every triangle with an angle under 1° and one over 120° (a cap) has its long edge flipped with the triangle across it when that edge is inside a region and the result is better; otherwise a vertex is inserted in the pair (projected onto the surface) and the pair split into four. Region borders and existing vertices stay untouched, so the invariant holds.</p>
+<p>Collapses leave border vertices where the shortest-edge order put them, so border edges are uneven. <code>relaxBorders</code> slides every border vertex along its border, like Lloyd's algorithm relaxes CVT sites, on all levels at once. A vertex and all its copies are <em>one</em> variable: its arclength along the border chain of the finest level it exists on, bounded by the midpoints to its neighbours there; vertices attached to a coarser edge slide along that edge between their neighbours on it and follow its ends; junctions are fixed. Interior vertices next to a border move too, in their tangent plane, by at most half their shortest edge. The energy is the CVT energy of every triangle touching a moving vertex, on every level:</p>
+<p class="math">E = Σ<sub>levels <i>ℓ</i></sub> <i>h</i><sub>ℓ</sub><sup>−4</sup> Σ<sub>triangles <i>t</i> ∋ moving vertex</sub> Σ<sub>corners <i>c</i></sub> ∫<sub><i>t</i></sub> λ<sub>c</sub>(<i>y</i>) ‖<i>y</i> − <i>p</i><sub>c</sub>‖² d<i>y</i></p>
+<p>where λ<sub>c</sub> is the barycentric share of corner <i>c</i> and <i>h</i><sub>ℓ</sub> the level's mean border edge length, which makes every level count equally. <i>E</i> is minimized with L-BFGS-B (LBFGSpp, analytic gradient, 200 iterations) under the arclength bounds. Steps that would flip a triangle or turn it past 60° on any level are halved, then undone.</p>
+
+<figure id="fig-relax">
+  <img src="figures/diagram-relax.svg" alt="Border relaxation evening out border edges" width="1040" height="196" loading="lazy">
+  <figcaption><span class="fig">Figure 6.</span> Border relaxation (§3.10). (a) Collapses leave border vertices unevenly spaced. (b) Each vertex slides along its border (one arclength variable for all its copies on all levels, junctions fixed) to minimize the CVT energy of the triangles around it on every level, which evens out the border edges.</figcaption>
+</figure>
+
+<h3 id="m-uv"><span class="num">3.11</span>Texture coordinates<a class="anchor" href="#m-uv" aria-label="Link to this section"></a></h3>
+<p><strong>Preserving input UVs.</strong> Texture coordinates are stored per face corner. UV <em>islands</em> are the connected components of faces across edges whose corner UVs match on both sides. Every region is kept inside one island: level 0's charts are split along seams, clustering only joins regions of the same island, and seam straightening and disk repair never move a seam. Inside a region UVs are continuous, so the remeshing stage interpolates them with the same barycentrics as positions, and every coarse vertex samples the texture where its own surface point was. Two details matter for correctness. A seam can end <em>inside</em> an island (a slit), so a region may still contain a vertex with two UVs: when a border vertex moves, its new UV is taken only from faces on the same side of such a seam, and the flat-triangle fix leaves pairs that meet along one alone. In the export, vertices are split per distinct (vertex, UV) pair.</p>
+<p><strong>Generating atlases.</strong> A mesh without UVs gets one atlas per level instead. Every region of the level is flattened with the same padded LSCM as §<a href="#m-flatten">3.6</a> and scaled to its 3D area, then <code>ChartBinPack</code> packs the charts: each is rotated so that its minimum-area enclosing rectangle (tested over the directions of its convex hull edges) is axis-aligned; the rectangles, padded by <code>--pack-padding</code> times the mean chart side, are packed largest first with MaxRects <a href="#ref-jylanki">[7]</a> (best short-side fit, 90° rotations allowed) into the smallest square that holds them, found by growing from the total area in 2% steps; the square is scaled uniformly onto [0, 1]². Charts are only rotated, translated and scaled by one common factor, never mirrored or stretched, so shapes, aspect ratios and relative texel density are kept. Different levels' atlases overlap in UV space; each level is a separate texture.</p>
+
+<figure id="fig-binpack">
+  <img src="figures/diagram-binpack.svg" alt="Bin packing of charts into the unit square" width="1040" height="330" loading="lazy">
+  <figcaption><span class="fig">Figure 7.</span> Atlas packing (§3.11) of the sixteen charts of Figure 2(c). (a) Charts as flattened, in arbitrary orientation. (b) Each turned so that its minimum-area enclosing rectangle is axis-aligned. (c) MaxRects, largest first, into the smallest square found, scaled uniformly onto [0, 1]² with 2% padding: shapes and relative sizes are kept.</figcaption>
+</figure>
+
+<h3 id="m-export"><span class="num">3.12</span>Export to the meshlet DAG<a class="anchor" href="#m-export" aria-label="Link to this section"></a></h3>
+<p><code>MlodWriter</code> maps the hierarchy onto meshlet-viewer's DAG:</p>
+<ul>
+  <li>Every level's surface goes into one vertex buffer; the index buffer is level 0.</li>
+  <li>Each region of each level is exactly one meshlet. Only a region beyond 256 vertices or 256 triangles is split, into the fewest edge-connected parts of about equal size.</li>
+  <li>A group at DAG depth <i>k</i> is the set of level-<i>k</i> regions that merge into one level-(<i>k</i>+1) region; its coarse bounds and error are that parent's. Split halves count as one parent. The top level forms terminal groups (<i>e</i><sub>coarse</sub> = ∞).</li>
+  <li>A region's error is the larger of its children's errors and an approximate two-sided Hausdorff distance between its remeshed surface and its children's, measured at vertices, so errors grow monotonically; bounding spheres are merged upward the same way.</li>
+  <li>The selection BVH is built with meshoptimizer's <code>clodBuildHierarchy</code>, 8 wide, one tree per depth, exactly as the viewer builds it for its own hierarchies. Per-triangle edge masks mark meshlet perimeter edges for the viewer's outline rendering.</li>
+</ul>
+<p>Since swapping a group for its parent replaces exactly the faces inside the group's outer border, and that border is nested, any cut the renderer selects is crack-free.</p>
+<figure id="fig-dag">
+  <img src="figures/diagram-dag.svg" alt="Region hierarchy as a meshlet DAG with one LOD cut" width="1040" height="320" loading="lazy">
+  <figcaption><span class="fig">Figure 8.</span> The region hierarchy as a meshlet DAG (§3.12). Every region is one meshlet; a group (rounded box) is the set of regions that merge into one parent and is swapped for it as a unit. White outlines mark one cut the renderer can select by screen-space error, mixing levels 0 and 1; nesting makes every such cut crack-free.</figcaption>
+</figure>
+<figure id="fig-lodcut">
+  <img src="figures/viewer-metasphere-lod-cut.png" alt="meshlet-viewer showing several LOD levels side by side" width="900" height="900" loading="lazy" style="max-width:560px;margin:0 auto">
+  <figcaption><span class="fig">Figure 9.</span> The metasphere <code>.mlod</code> in meshlet-viewer with automatic LOD selection (camera close, <code>--lod-error 8</code>): meshlets of three DAG levels, colored by level (lighter is finer), are drawn side by side. Black lines are meshlet outlines; meshlets of different levels meet along common borders, with no cracks.</figcaption>
+</figure>
+
+</section>
+
+<section id="results">
+<h2><span class="num">4</span>Results<a class="anchor" href="#results" aria-label="Link to this section"></a></h2>
+
+<h3 id="r-setup"><span class="num">4.1</span>Setup<a class="anchor" href="#r-setup" aria-label="Link to this section"></a></h3>
+<p>All runs use the default parameters (Appendix <a href="#a-options">B</a>) on an AMD Ryzen AI 9 365 (10 cores, 20 threads), Windows 11, MSVC 19.44 with <code>/O2</code> and <code>/openmp:llvm</code>. Two models are used: the <strong>metasphere</strong> (66,264 vertices, 132,524 triangles, no UVs), the regression test of the repository, and <strong>cosplay</strong>, a textured photogrammetry figure (299,788 vertices, 599,642 triangles, a 4096² texture with 273 UV islands and 24,915 seam edges).</p>
+
+<h3 id="r-levels"><span class="num">4.2</span>Level structure<a class="anchor" href="#r-levels" aria-label="Link to this section"></a></h3>
+<figure id="fig-metasphere">
+  <img src="figures/metasphere-levels.png" alt="Metasphere levels 0, 2, 4, 6 and 9 colored by region" width="1532" height="300">
+  <figcaption><span class="fig">Figure 10.</span> Metasphere levels 0, 2, 4, 6 and 9, colored by region (one region = one meshlet), region borders dark, triangle edges drawn where triangles are large enough to see. Borders coarsen along with the interiors, and every border is a subset of the borders to its left.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+<caption><span class="fig">Table 1.</span> Levels of the metasphere: each level keeps 35% of the interior vertices of the one below; regions merge in cliques of up to four and are split above 256 triangles.</caption>
+<thead><tr><th class="n">Level</th><th class="n">Vertices</th><th class="n">Triangles</th><th class="n">Regions</th><th class="n">Triangles / region</th></tr></thead>
+<tbody>
+<tr><td class="n">0</td><td class="n">66,264</td><td class="n">132,524</td><td class="n">1,138</td><td class="n">116.5</td></tr>
+<tr><td class="n">1</td><td class="n">24,896</td><td class="n">49,788</td><td class="n">735</td><td class="n">67.7</td></tr>
+<tr><td class="n">2</td><td class="n">10,165</td><td class="n">20,326</td><td class="n">258</td><td class="n">78.8</td></tr>
+<tr><td class="n">3</td><td class="n">4,490</td><td class="n">8,976</td><td class="n">111</td><td class="n">80.9</td></tr>
+<tr><td class="n">4</td><td class="n">2,338</td><td class="n">4,672</td><td class="n">56</td><td class="n">83.4</td></tr>
+<tr><td class="n">5</td><td class="n">1,364</td><td class="n">2,724</td><td class="n">34</td><td class="n">80.1</td></tr>
+<tr><td class="n">6</td><td class="n">871</td><td class="n">1,738</td><td class="n">22</td><td class="n">79.0</td></tr>
+<tr><td class="n">7</td><td class="n">533</td><td class="n">1,062</td><td class="n">13</td><td class="n">81.7</td></tr>
+<tr><td class="n">8</td><td class="n">298</td><td class="n">592</td><td class="n">8</td><td class="n">74.0</td></tr>
+<tr><td class="n">9</td><td class="n">175</td><td class="n">346</td><td class="n">4</td><td class="n">86.5</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>The metasphere gives 10 levels, 2,379 meshlets in 823 groups and 222,748 triangles over all levels, 1.68× the input. After level 1 every level has 40–45% of the triangles of the one below, and regions settle at about 80 triangles, a third of the meshlet limit: the split threshold keeps them from growing, and border simplification keeps the border share of each region roughly constant. Level 1 has smaller regions than level 0 because the many merges that exceed 256 triangles are split in two.</p>
+
+<figure id="fig-viewer-levels">
+  <div class="shots">
+    <div><img src="figures/viewer-metasphere-level0.png" alt="metasphere level 0 in meshlet-viewer" width="900" height="900" loading="lazy"><span class="sub">level 0 · 1,138 meshlets</span></div>
+    <div><img src="figures/viewer-metasphere-level3.png" alt="metasphere level 3 in meshlet-viewer" width="900" height="900" loading="lazy"><span class="sub">level 3 · 111 meshlets</span></div>
+    <div><img src="figures/viewer-metasphere-level6.png" alt="metasphere level 6 in meshlet-viewer" width="900" height="900" loading="lazy"><span class="sub">level 6 · 22 meshlets</span></div>
+  </div>
+  <figcaption><span class="fig">Figure 11.</span> The metasphere <code>.mlod</code> in meshlet-viewer at fixed DAG levels (<code>--lod-level</code>): one meshlet per region, outlined in black, with the triangle wireframe in thin lines.</figcaption>
+</figure>
+
+<figure id="fig-cosplay">
+  <img src="figures/cosplay-levels.png" alt="Cosplay levels 1, 3, 5 and 12 colored by region" width="1368" height="560">
+  <figcaption><span class="fig">Figure 12.</span> Cosplay levels 1, 3, 5 and 12. Regions never cross UV seams, so small texture islands (buttons, straps, eyes) remain separate regions up to the top level.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+<caption><span class="fig">Table 2.</span> Levels of the cosplay scan. From level 6 on, most regions are whole UV islands and can no longer merge.</caption>
+<thead><tr><th class="n">Level</th><th class="n">Vertices</th><th class="n">Triangles</th><th class="n">Regions</th><th class="n">Triangles / region</th></tr></thead>
+<tbody>
+<tr><td class="n">0</td><td class="n">299,816</td><td class="n">599,698</td><td class="n">10,441</td><td class="n">57.4</td></tr>
+<tr><td class="n">1</td><td class="n">117,711</td><td class="n">235,488</td><td class="n">3,914</td><td class="n">60.2</td></tr>
+<tr><td class="n">2</td><td class="n">49,753</td><td class="n">99,572</td><td class="n">1,490</td><td class="n">66.8</td></tr>
+<tr><td class="n">3</td><td class="n">22,966</td><td class="n">45,998</td><td class="n">705</td><td class="n">65.2</td></tr>
+<tr><td class="n">4</td><td class="n">12,389</td><td class="n">24,844</td><td class="n">449</td><td class="n">55.3</td></tr>
+<tr><td class="n">6</td><td class="n">6,292</td><td class="n">12,650</td><td class="n">319</td><td class="n">39.7</td></tr>
+<tr><td class="n">9</td><td class="n">5,498</td><td class="n">11,062</td><td class="n">299</td><td class="n">37.0</td></tr>
+<tr><td class="n">12</td><td class="n">5,490</td><td class="n">11,046</td><td class="n">299</td><td class="n">36.9</td></tr>
+</tbody>
+</table>
+</div>
+<p>Cosplay gives 13 levels, 19,469 meshlets in 7,996 groups and 1,100,946 triangles over all levels. The first five levels shrink like the metasphere's. Afterwards the region count stalls at 299: the model has 273 UV islands, and once an island is a single region it has no neighbour it may merge with. Levels 9 to 12 are nearly identical and the loop stops only at <code>--max-depth</code>. This is the price of exact UV preservation (§<a href="#limitations">5</a>).</p>
+
+<h3 id="r-time"><span class="num">4.3</span>Running time<a class="anchor" href="#r-time" aria-label="Link to this section"></a></h3>
+<div class="table-wrap">
+<table>
+<caption><span class="fig">Table 3.</span> Stage times in seconds, 20 threads. The metasphere run includes the atlas stage (no input UVs); totals include reading the PLY and building the projection tree.</caption>
+<thead><tr><th>Stage</th><th class="n">Metasphere</th><th class="n">Cosplay</th></tr></thead>
+<tbody>
+<tr><td>Base charts (RCVT, regularization, seams)</td><td class="n">2.45</td><td class="n">15.94</td></tr>
+<tr><td>Level loop (all levels)</td><td class="n">3.37</td><td class="n">29.67</td></tr>
+<tr><td>Flat triangles</td><td class="n">0.44</td><td class="n">5.73</td></tr>
+<tr><td>Border relaxation</td><td class="n">14.97</td><td class="n">95.35</td></tr>
+<tr><td>UV atlases</td><td class="n">1.87</td><td class="n">—</td></tr>
+<tr><td>Write .mlod</td><td class="n">0.31</td><td class="n">1.98</td></tr>
+<tr class="best"><td><strong>Total</strong></td><td class="n"><strong>23.8</strong></td><td class="n"><strong>150.5</strong></td></tr>
+</tbody>
+</table>
+</div>
+<p>The border relaxation dominates: it optimizes every border vertex of every level jointly, and most of its time is spent inside LBFGSpp's bound-constrained line search rather than in the energy and gradient evaluation, which are parallel. The level loop itself is fast because each level is a fraction of the one below; level 1 alone accounts for half of it. Earlier versions of the pipeline took about 70 s on the metasphere; the factored LSCM solve (15 s → 1.7 s) and an analytic relaxation gradient (53 s → 15 s) account for most of the difference.</p>
+
+<h3 id="r-uv"><span class="num">4.4</span>Texture fidelity<a class="anchor" href="#r-uv" aria-label="Link to this section"></a></h3>
+<p>Measuring UV accuracy on a coarse level needs care. Comparing a triangle's UV with the UV of the <em>nearest</em> point on the input fails on thin parts (fingers, straps, cloth edges), where the nearest point of a coarse triangle can lie on a different island, and gave spurious errors of thousands of texels. We instead measure in the direction the renderer uses the data: for every output triangle, take the UV at its centroid, find the input triangle that contains that UV (choosing the nearest in 3D when the atlas reuses texture area), map it to its 3D point, and report the distance <i>d</i><sub>tex</sub> from the triangle's centroid to that point. It is compared with the geometric error <i>d</i><sub>geo</sub>, the centroid's distance to the input surface. Distances are in input mean edge lengths (3.40 units). A triangle is counted as <em>mismatched</em> when <i>d</i><sub>tex</sub> &gt; <i>d</i><sub>geo</sub> + 4.</p>
+
+<div class="table-wrap">
+<table>
+<caption><span class="fig">Table 4.</span> Texture fidelity on cosplay: geometric error vs. distance to the surface point the texture is sampled from, in mean edge lengths (p50 / p99), mismatched triangles and triangles whose UV centroid falls outside every input chart by more than 2 texels.</caption>
+<thead><tr><th class="n">Level</th><th class="n">d<sub>geo</sub> p50</th><th class="n">d<sub>geo</sub> p99</th><th class="n">d<sub>tex</sub> p50</th><th class="n">d<sub>tex</sub> p99</th><th class="n">Mismatched</th><th class="n">Off-chart</th></tr></thead>
+<tbody>
+<tr><td class="n">0</td><td class="n">0.01</td><td class="n">0.19</td><td class="n">0.02</td><td class="n">0.34</td><td class="n">1</td><td class="n">0.00%</td></tr>
+<tr><td class="n">1</td><td class="n">0.04</td><td class="n">0.34</td><td class="n">0.07</td><td class="n">0.45</td><td class="n">2</td><td class="n">0.00%</td></tr>
+<tr><td class="n">2</td><td class="n">0.07</td><td class="n">0.55</td><td class="n">0.11</td><td class="n">0.68</td><td class="n">1</td><td class="n">0.01%</td></tr>
+<tr><td class="n">4</td><td class="n">0.20</td><td class="n">1.34</td><td class="n">0.26</td><td class="n">1.87</td><td class="n">0</td><td class="n">0.05%</td></tr>
+<tr><td class="n">6</td><td class="n">0.29</td><td class="n">2.44</td><td class="n">0.38</td><td class="n">3.70</td><td class="n">14 (0.11%)</td><td class="n">0.17%</td></tr>
+<tr><td class="n">9</td><td class="n">0.29</td><td class="n">3.58</td><td class="n">0.39</td><td class="n">5.14</td><td class="n">28 (0.25%)</td><td class="n">0.21%</td></tr>
+<tr><td class="n">12</td><td class="n">0.28</td><td class="n">3.66</td><td class="n">0.39</td><td class="n">5.44</td><td class="n">28 (0.25%)</td><td class="n">0.21%</td></tr>
+</tbody>
+</table>
+</div>
+<p>The texture error tracks the geometric error at every level, at 1.2–1.8× in the tails (99th percentiles): coarse triangles sample the texture where their surface used to be, and the extra error comes from interpolating UVs linearly across triangles that are now much larger than the input's. The handful of mismatched triangles at levels 0–2 were 15, 11 and 4 before the slit-seam handling of §<a href="#m-uv">3.11</a>; the remaining ones at coarse levels sit on parts of the surface that the coarse level approximates poorly (geometric error of several edges). Assigning input UVs to the snapped interior vertices instead of interpolated ones was tried and changed the 99th percentiles by less than 0.03 edge lengths, so the interpolated UVs are kept.</p>
+
+<figure id="fig-viewer-uv">
+  <div class="shots">
+    <div><img src="figures/viewer-cosplay-uv-level0.png" alt="cosplay level 0 UV grid" width="700" height="1000" loading="lazy"><span class="sub">level 0</span></div>
+    <div><img src="figures/viewer-cosplay-uv-level4.png" alt="cosplay level 4 UV grid" width="700" height="1000" loading="lazy"><span class="sub">level 4</span></div>
+    <div><img src="figures/viewer-cosplay-uv-level9.png" alt="cosplay level 9 UV grid" width="700" height="1000" loading="lazy"><span class="sub">level 9</span></div>
+  </div>
+  <figcaption><span class="fig">Figure 13.</span> Cosplay's own texture coordinates in meshlet-viewer's UV grid (<code>--uv-grid</code>) at levels 0, 4 and 9. The grid follows the input atlas on every level: it stays continuous across meshlets inside each UV island and breaks only at the input's texture seams, which are region borders.</figcaption>
+</figure>
+
+<h3 id="r-atlas"><span class="num">4.5</span>Generated atlases<a class="anchor" href="#r-atlas" aria-label="Link to this section"></a></h3>
+<figure id="fig-atlas">
+  <img src="figures/metasphere-atlases.png" alt="UV atlases of metasphere levels 0, 3, 6 and 9" width="1224" height="300">
+  <figcaption><span class="fig">Figure 14.</span> Generated UV atlases of metasphere levels 0, 3, 6 and 9 (1,138, 111, 22 and 4 charts), one per level, each filling the unit square. Charts keep their shape and their relative size: all charts of a level share one scale.</figcaption>
+</figure>
+<p>Every atlas was rasterized at 1024² and checked: all UVs lie in [0, 1]², the ratio of UV area to 3D area is identical for every chart of a level (min/median = max/median = 1.000), and no pixel is covered by two charts. Coverage falls from 62% at level 0, where many similar small charts pack tightly, to 40–45% for the few large, irregular charts of coarse levels. The two coarsest levels each contain one triangle folded by LSCM (level 9: 254 pixels of self-overlap within one chart), a limitation of flattening very large curved regions conformally.</p>
+
+<figure id="fig-viewer-atlas">
+  <img src="figures/viewer-metasphere-atlas-level2.png" alt="metasphere level 2 generated atlas as a UV grid" width="900" height="900" loading="lazy" style="max-width:560px;margin:0 auto">
+  <figcaption><span class="fig">Figure 15.</span> The generated atlas of metasphere level 2 as a UV grid in meshlet-viewer: nearly square cells (LSCM is conformal), continuous inside every chart, breaking only at chart borders.</figcaption>
+</figure>
+
+<h3 id="r-validation"><span class="num">4.6</span>Validation<a class="anchor" href="#r-validation" aria-label="Link to this section"></a></h3>
+<p>The repository's test (<code>ctest</code>) builds the metasphere with <code>--check --check-cracks</code>: it fails unless the <code>.mlod</code> is written, has at least two levels and no pair of levels violates the nesting invariant. All 45 level pairs pass. The written file is read back with meshlet-viewer's own loader for both format versions, and the cosplay output was checked the same way. Output is deterministic: repeated runs write byte-identical metasphere files apart from the stored build time.</p>
+</section>
+
+<section id="limitations">
+<h2><span class="num">5</span>Limitations<a class="anchor" href="#limitations" aria-label="Link to this section"></a></h2>
+<ul>
+  <li><strong>UV islands bound the coarsest level.</strong> Regions never cross a seam, so a textured model cannot get coarser than one region per island (299 regions on cosplay). Merging across seams would need texture-space resampling (baking) of the merged region.</li>
+  <li><strong>Border relaxation cost.</strong> The joint optimization over all levels takes 60% of the running time; a per-level or block-coordinate scheme would parallelize better.</li>
+  <li><strong>Conformal folds.</strong> LSCM can fold large curved regions. The remeshing stage detects folds and falls back to 3D decimation, and the atlas stage keeps the fold (one triangle on the coarsest metasphere levels). A bijective parametrization would remove both.</li>
+  <li><strong>Storage.</strong> Every level stores its own vertices and triangles (1.68× the input's triangles over all levels on the metasphere, 1.84× on cosplay), and nested borders keep collinear border vertices on finer levels that a single-level simplifier would remove.</li>
+  <li><strong>Atlases per level.</strong> Generated atlases are independent per level, so a texture must be baked for each level that is drawn.</li>
+</ul>
+</section>
+
+<section id="conclusion">
+<h2><span class="num">6</span>Conclusion<a class="anchor" href="#conclusion" aria-label="Link to this section"></a></h2>
+<p>meshlet-optimizer builds meshlet LOD hierarchies whose clusters are designed rather than left over: compact CVT charts at the bottom, clique-merged and remeshed regions above, one meshlet per region. Keeping region borders nested across levels, by snapping every dropped border vertex onto the coarser border on all finer levels, makes any cut through the DAG crack-free while still letting borders coarsen, and a joint relaxation over all levels evens them out. Treating UV seams as borders carries texture coordinates through every level with errors that follow the geometric error, and untextured meshes get packed per-level atlases. The output is a standard cluster-LOD DAG that an existing mesh-shader viewer renders unchanged.</p>
+</section>
+
+<section id="references">
+<h2>References<a class="anchor" href="#references" aria-label="Link to this section"></a></h2>
+<ol class="refs">
+  <li id="ref-karis">B. Karis, R. Stubbe, G. Wihlidal. <em>Nanite: A Deep Dive.</em> SIGGRAPH Advances in Real-Time Rendering in Games, 2021.</li>
+  <li id="ref-meshopt">A. Kapoulkine. <em>meshoptimizer</em>, including <code>demo/clusterlod.h</code>. <a href="https://github.com/zeux/meshoptimizer">github.com/zeux/meshoptimizer</a>.</li>
+  <li id="ref-levy">B. Lévy, S. Petitjean, N. Ray, J. Maillot. <em>Least Squares Conformal Maps for Automatic Texture Atlas Generation.</em> ACM Transactions on Graphics 21(3), SIGGRAPH 2002.</li>
+  <li id="ref-yan">D.-M. Yan, B. Lévy, Y. Liu, F. Sun, W. Wang. <em>Isotropic Remeshing with Fast and Exact Computation of Restricted Voronoi Diagram.</em> Computer Graphics Forum 28(5), SGP 2009.</li>
+  <li id="ref-lloyd">S. Lloyd. <em>Least Squares Quantization in PCM.</em> IEEE Transactions on Information Theory 28(2), 1982.</li>
+  <li id="ref-liu">Y. Liu, W. Wang, B. Lévy, F. Sun, D.-M. Yan, L. Lu, C. Yang. <em>On Centroidal Voronoi Tessellation — Energy Smoothness and Fast Computation.</em> ACM Transactions on Graphics 28(4), 2009.</li>
+  <li id="ref-jylanki">J. Jylänki. <em>A Thousand Ways to Pack the Bin — A Practical Approach to Two-Dimensional Rectangle Bin Packing.</em> 2010.</li>
+  <li id="ref-sander">P. V. Sander, J. Snyder, S. J. Gortler, H. Hoppe. <em>Texture Mapping Progressive Meshes.</em> SIGGRAPH 2001.</li>
+</ol>
+</section>
+
+<section id="appendix">
+<h2>Appendices<a class="anchor" href="#appendix" aria-label="Link to this section"></a></h2>
+
+<h3 id="a-build"><span class="num">A</span>Building and running<a class="anchor" href="#a-build" aria-label="Link to this section"></a></h3>
+<p>Dependencies are pinned git submodules under <code>external/</code>: Eigen 3.4, cereal, fmt, happly, argparse, CDT, LBFGSpp, meshoptimizer and kdtree-cpp. OpenMP is on by default (<code>MOPT_OPENMP</code>); on macOS it uses Homebrew's libomp when installed.</p>
+<pre><code>git clone --recursive https://github.com/rgb2hsv/meshlet-optimizer.git
+cd meshlet-optimizer
+cmake --preset vs2026          <span class="c"># or vs2022, or ninja (macOS / Linux / developer prompt)</span>
+cmake --build --preset vs2026 --config Release
+ctest --test-dir build-vs2026 -C Release</code></pre>
+<pre><code>meshlet-optimizer assets/model/metasphere.ply -o metasphere.mlod
+meshlet-optimizer assets/model/cosplay.ply -o cosplay.mlod --save-levels levels/
+meshlets cosplay.mlod          <span class="c"># meshlet-viewer</span></code></pre>
+<p>The tool prints one line per stage with its duration, then a summary of levels, meshlets, groups, vertices and triangles. <code>--save-levels DIR</code> also writes every level as <code>DIR/level_<i>k</i>.ply</code> with per-corner UVs and an integer <code>region</code> per face, which is what the figures of this page are made from.</p>
+
+<h3 id="a-options"><span class="num">B</span>Parameters<a class="anchor" href="#a-options" aria-label="Link to this section"></a></h3>
+<div class="table-wrap">
+<table>
+<caption><span class="fig">Table 5.</span> Command-line parameters and defaults (<code>meshlet-optimizer --help</code>).</caption>
+<thead><tr><th>Option</th><th class="n">Default</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>--chart-triangles</code></td><td class="n">256</td><td>Largest base chart, in triangles touching it; sets the seed count (§3.3).</td></tr>
+<tr><td><code>--cvt-lloyd</code> / <code>--cvt-lbfgs</code></td><td class="n">4 / 40</td><td>Lloyd warm-up and L-BFGS iterations of the base CVT.</td></tr>
+<tr><td><code>--min-chart-vertices</code></td><td class="n">16</td><td>Smaller charts merge into a neighbour.</td></tr>
+<tr><td><code>--no-regularize</code></td><td class="n"></td><td>Skip opening, region competition and disk splitting.</td></tr>
+<tr><td><code>--max-clique</code></td><td class="n">4</td><td>Most regions merged into one per level (§3.5).</td></tr>
+<tr><td><code>--stop-at-regions</code> / <code>--max-depth</code></td><td class="n">2 / 12</td><td>Stop when the top level is this small, or after this many levels.</td></tr>
+<tr><td><code>--max-hole-fraction</code></td><td class="n">0.5</td><td>Largest hole filled to keep a group a disk.</td></tr>
+<tr><td><code>--no-straighten-seams</code></td><td class="n"></td><td>Keep the base charts' CVT borders (§3.4).</td></tr>
+<tr><td><code>--lscm-padding</code></td><td class="n">1</td><td>Rings of neighbour triangles flattened with each region (§3.6).</td></tr>
+<tr><td><code>--lscm-iterations</code></td><td class="n">1024</td><td>Conjugate-gradient iterations if the LSCM factorization fails.</td></tr>
+<tr><td><code>--interior-fraction</code></td><td class="n">0.35</td><td>Interior vertices kept per region and level (§3.7).</td></tr>
+<tr><td><code>--resample-lloyd</code></td><td class="n">10</td><td>Lloyd iterations of each region's 2D CVT.</td></tr>
+<tr><td><code>--split-above-faces</code></td><td class="n">256</td><td>Split remeshed regions with more triangles (§3.8).</td></tr>
+<tr><td><code>--border-target-scale</code></td><td class="n">1</td><td>Border edge target in mean interior edge lengths (§3.9).</td></tr>
+<tr><td><code>--border-max-normal-change</code></td><td class="n">60°</td><td>Largest triangle turn a border collapse may cause.</td></tr>
+<tr><td><code>--flat-min-angle</code></td><td class="n">1°</td><td>Caps with a smaller angle are flipped or split (§3.10).</td></tr>
+<tr><td><code>--border-lloyd-iterations</code></td><td class="n">200</td><td>L-BFGS-B iterations of the border relaxation.</td></tr>
+<tr><td><code>--pack-padding</code></td><td class="n">0.02</td><td>Space around each chart in a generated atlas (§3.11).</td></tr>
+<tr><td><code>--no-project</code></td><td class="n"></td><td>Keep resampled vertices off the input surface.</td></tr>
+<tr><td><code>--check</code> / <code>--check-cracks</code></td><td class="n"></td><td>Fail unless written; verify the nesting invariant for all level pairs.</td></tr>
+<tr><td><code>--save-levels DIR</code></td><td class="n"></td><td>Write every level as a PLY with UVs and regions.</td></tr>
+<tr><td><code>-j</code>, <code>--threads</code></td><td class="n">all</td><td>OpenMP threads.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="a-format"><span class="num">C</span>The .mlod format<a class="anchor" href="#a-format" aria-label="Link to this section"></a></h3>
+<p>A <code>.mlod</code> file is a cereal portable binary archive, readable on either endianness: an endianness byte, the magic <code>"MLOD"</code> and a version, then the fields below in order. Arrays are a 64-bit count followed by raw 32-bit words (8-bit for byte arrays). Version 1 has no texture coordinates; version 2, written whenever the levels have UVs, adds one per vertex right after the vertices.</p>
+<div class="table-wrap">
+<table>
+<caption><span class="fig">Table 6.</span> Archive layout (meshlet-viewer <code>src/meshlet_file.cpp</code>).</caption>
+<thead><tr><th>Field</th><th>Type</th><th>Content</th></tr></thead>
+<tbody>
+<tr><td>settings</td><td>scalars</td><td>Meshlet builder settings; for meshlet-optimizer files, the largest meshlet written.</td></tr>
+<tr><td>vertices</td><td><code>Vertex[]</code> (24 B)</td><td>Position and normal of every vertex of every level.</td></tr>
+<tr><td>texcoords</td><td><code>vec2[]</code></td><td>Version 2 only: one UV per vertex.</td></tr>
+<tr><td>indices</td><td><code>uint32[]</code></td><td>Level 0 triangles; bounds, center, radius, mean edge length.</td></tr>
+<tr><td>meshlets</td><td><code>meshopt_Meshlet[]</code></td><td>Vertex/triangle offsets and counts, one per region (part).</td></tr>
+<tr><td>meshlet vertices / triangles</td><td><code>uint32[]</code> / <code>uint8[]</code></td><td>Local-to-global vertex map; 3 local indices per triangle.</td></tr>
+<tr><td>bounds</td><td><code>MeshletBounds[]</code></td><td>Bounding sphere and normal cone per meshlet.</td></tr>
+<tr><td>lods</td><td><code>MeshletLod[]</code> (48 B)</td><td>Self and coarse error spheres and errors, DAG depth.</td></tr>
+<tr><td>edge masks</td><td><code>uint8[]</code></td><td>Per triangle: which edges are on the meshlet perimeter.</td></tr>
+<tr><td>statistics</td><td>scalars</td><td>Build time, triangle counts per level, clusters per level.</td></tr>
+<tr><td>LOD BVH</td><td><code>LodNode[]</code>, <code>LodGroupRange[]</code></td><td>Selection BVH over groups, roots, node counts per depth.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="a-source"><span class="num">D</span>Source layout<a class="anchor" href="#a-source" aria-label="Link to this section"></a></h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Directory</th><th>Contents</th></tr></thead>
+<tbody>
+<tr><td><code>src/app</code></td><td>Command line (<code>Options</code>) and <code>main</code>.</td></tr>
+<tr><td><code>src/core</code></td><td>Eigen type aliases, <code>Expects</code>/<code>Fail</code>, triangle geometry, line search, mutable heap.</td></tr>
+<tr><td><code>src/mesh</code></td><td><code>Mesh</code>, PLY reader and writer, <code>MeshDecimation</code>, <code>MeshProjector</code>.</td></tr>
+<tr><td><code>src/charts</code></td><td><code>CvtSegmentation</code>, <code>LabelRegularization</code> (§3.3).</td></tr>
+<tr><td><code>src/flattening</code></td><td><code>ChartLayout</code>, <code>Mosaic</code>, LSCM (<code>ChartFlattening</code>), <code>ChartBinPack</code>.</td></tr>
+<tr><td><code>src/hierarchy</code></td><td><code>MeshletBuilder</code> (all stages in order), <code>RegionHierarchy</code>, <code>DiskGroups</code>, <code>SeamStraightening</code>, <code>RegionResampling</code>, <code>RegionSplit</code>, <code>BorderSimplification</code>, <code>LevelCracks</code>.</td></tr>
+<tr><td><code>src/mlod</code></td><td><code>MlodWriter</code>: levels to meshlet DAG and BVH.</td></tr>
+<tr><td><code>docs/figures</code></td><td>Figure scripts for this page (Python standard library only).</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3 id="a-figures"><span class="num">E</span>Reproducing the figures<a class="anchor" href="#a-figures" aria-label="Link to this section"></a></h3>
+<p>Every figure is generated by a script in <code>docs/figures</code> that needs nothing beyond the Python standard library. The step diagrams (Figures 2–8) run simplified planar versions of the tool's algorithms on a small Delaunay mesh (<code>make_diagrams.py</code>). The level renders and atlases are drawn from <code>--save-levels</code> output with a z-buffered rasterizer and a zlib PNG writer (<code>plyfig.py</code>), and the screenshots are taken with meshlet-viewer's <code>--screenshot</code> (<code>make_viewer_shots.py</code>).</p>
+<pre><code>meshlet-optimizer assets/model/metasphere.ply -o metasphere.mlod --save-levels levels/metasphere
+meshlet-optimizer assets/model/cosplay.ply -o cosplay.mlod --save-levels levels/cosplay
+cd docs/figures
+python make_level_renders.py ../../levels/metasphere metasphere-levels.png --levels 0 2 4 6 9 --size 300
+python make_level_renders.py ../../levels/cosplay cosplay-levels.png --levels 1 3 5 12 --size 560 --aspect 0.6 --yaw 25 --pitch 8
+python make_atlas.py ../../levels/metasphere metasphere-atlases.png --levels 0 3 6 9 --size 300
+python make_diagrams.py
+python make_viewer_shots.py path/to/meshlets metasphere.mlod cosplay.mlod</code></pre>
+</section>
+
+<footer class="foot">meshlet-optimizer · documentation in the style of a technical paper · numbers measured with the code at the commit this page was added with.</footer>
+
+</div>
+</main>
+
+<script src="site.js"></script>
+</body>
+</html>
