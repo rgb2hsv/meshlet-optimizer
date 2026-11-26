@@ -628,9 +628,12 @@ bool MeshletBuilder::makeIsometricUvs()
     IsometricUvParams uvParams;
     uvParams.iterations = params_.uvIterations;
     uvParams.areaWeight = params_.uvAreaWeight;
+    uvParams.fitToAtlas = params_.uvFitToAtlas;
     bool any = false;
     for (LodLevel& level : levels) {
         if (!level.simplified.hasTexcoords()) continue;
+        level.atlasUvs.resize(level.simplified.texcoords.size());
+        for (size_t c = 0; c < level.atlasUvs.size(); c++) level.atlasUvs[c] = level.simplified.texcoords[c].cast<double>();
         MakeIsometricUvs(level.simplified, level.simplifiedFaceRegion, level.isometricUvs, uvParams);
         for (size_t c = 0; c < level.isometricUvs.size(); c++) level.simplified.texcoords[c] = level.isometricUvs[c].cast<float>();
         any = true;

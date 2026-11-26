@@ -21,6 +21,9 @@
  *     UV/3D scale - the average), solved by Gauss-Newton: each iteration linearizes the rotations and scales
  *     and solves the sparse normal equations with conjugate gradients. areaWeight 0 keeps every triangle's
  *     size (rigid motions).
+ *  3. Fit (fitToAtlas): each region is scaled uniformly and moved, without rotating, so its bounding box fits
+ *     tightly inside the bounding box of its chart in the atlas, centered: the packed charts' room is reused and
+ *     relaxed charts cannot run into each other.
  */
 #pragma once
 
@@ -34,6 +37,7 @@ namespace mopt
 struct IsometricUvParams {
     int iterations = 20;       // Gauss-Newton iterations of step 2 (0: step 1 only)
     double areaWeight = 1.0;   // weight of the authalic term (0: triangles keep their size)
+    bool fitToAtlas = true;    // step 3: each region scaled uniformly and moved to fit tightly inside its atlas chart's box
     double tolerance = 1e-12;  // step 2 stops once no unknown changes by more than this
     int cgIterations = 2000;   // conjugate-gradient iterations per Gauss-Newton step
 };

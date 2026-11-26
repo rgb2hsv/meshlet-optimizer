@@ -91,6 +91,8 @@ struct MeshletParams {
     bool isometricUvs = true;
     int uvIterations = 20;
     double uvAreaWeight = 1.0;
+    // After the relaxation, each region scaled uniformly and moved to fit tightly inside its atlas chart's box.
+    bool uvFitToAtlas = true;
 };
 
 // Builds the hierarchy and writes it as a .mlod. The base charts are a ChartLayout of the input mesh.

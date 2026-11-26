@@ -341,6 +341,41 @@ IsometricUvStats MakeIsometricUvs(const Mesh& mesh, const std::vector<int>& face
     }
     stats.meanGapAfter = MeanGap(uv, pairs);
 
+    if (params.fitToAtlas) {
+        // Step 3: each region scaled uniformly about its box center and moved onto its atlas chart's box center,
+        // as large as fits: it touches the atlas box on one axis and is centered on the other.
+        struct Box {
+            Vec2d lo = Vec2d::Constant(std::numeric_limits<double>::infinity()), hi = Vec2d::Constant(-std::numeric_limits<double>::infinity());
+            void add(const Vec2d& p)
+            {
+                lo = lo.cwiseMin(p);
+                hi = hi.cwiseMax(p);
+            }
+        };
+        std::map<int, Box> atlas, relaxed;
+        for (uint32_t f = 0; f < F; f++) {
+            for (int c = 0; c < 3; c++) {
+                atlas[faceRegion[f]].add(mesh.texcoords[3 * f + c].cast<double>());
+                relaxed[faceRegion[f]].add(uv[f][c]);
+            }
+        }
+        std::map<int, std::pair<double, Vec2d>> fit;  // region -> (scale, offset): p -> scale * p + offset
+        for (const auto& [region, a] : atlas) {
+            const Box& b = relaxed[region];
+            const Vec2d size = a.hi - a.lo, have = b.hi - b.lo;
+            double scale = std::numeric_limits<double>::infinity();
+            for (int axis = 0; axis < 2; axis++) {
+                if (have[axis] > 0.0) scale = std::min(scale, size[axis] / have[axis]);
+            }
+            if (!std::isfinite(scale) || !(scale > 0.0)) scale = 1.0;
+            fit[region] = {scale, 0.5 * (a.lo + a.hi) - scale * 0.5 * (b.lo + b.hi)};
+        }
+        for (uint32_t f = 0; f < F; f++) {
+            const auto& [scale, offset] = fit[faceRegion[f]];
+            for (Vec2d& c : uv[f]) c = scale * c + offset;
+        }
+    }
+
     out.resize(3 * F);
     for (size_t f = 0; f < F; f++) {
         for (int c = 0; c < 3; c++) out[3 * f + c] = uv[f][c];
