@@ -288,6 +288,7 @@ void MeshletBuilder::build(const Mesh& input, const StatusHandler& status)
         if (params_.relaxBorders) stage("Border relaxation", [&] { return relaxBorders(); });
     }
     stage("UV atlases", [&] { return buildUvAtlases(); });
+    if (params_.isometricUvs) stage("Isometric UVs", [&] { return makeIsometricUvs(); });
     stage("Write " + mlodFile_.string(), [&] { return writeMlod(); });
 }
 }  // namespace mopt
@@ -618,6 +619,19 @@ bool MeshletBuilder::buildUvAtlases()
         Expects(missing == 0, "Level {}: {} faces have no chart in the UV atlas", level.level, missing);
     }
     return true;
+}
+
+bool MeshletBuilder::makeIsometricUvs()
+{
+    IsometricUvParams uvParams;
+    uvParams.rigidIterations = params_.rigidUvIterations;
+    bool any = false;
+    for (LodLevel& level : levels) {
+        if (!level.simplified.hasTexcoords()) continue;
+        MakeIsometricUvs(level.simplified, level.simplifiedFaceRegion, uvParams);
+        any = true;
+    }
+    return any;
 }
 
 bool MeshletBuilder::sampleLevel()
