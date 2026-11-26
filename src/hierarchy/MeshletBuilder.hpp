@@ -228,6 +228,9 @@ private:
     // against its squared distance to the corner), each level scaled by its mean
     // border edge length to the fourth, minimized with L-BFGS-B (LBFGSpp, as the
     // CVT segmentation).
+    // With builder.projectToSurface, the moved border and interior vertices are
+    // then projected back onto the input surface, and the attached vertices
+    // placed again on their coarser edges (so no level pair cracks).
     // Moves that would flip a triangle or turn one past maxNormalChangeDegrees on
     // any level are halved, then undone. Uses simplifyLevelBorders()'s state.
     bool relaxBorders();

@@ -1616,9 +1616,39 @@ bool MeshletBuilder::relaxBorders()
         const V3d q = p[id] * L;
         return Vector3f(static_cast<float>(q.x()), static_cast<float>(q.y()), static_cast<float>(q.z()));
     };
+    // The relaxed positions, projected back onto the input surface (with
+    // builder.projectToSurface): every slider and ring vertex that moved is
+    // snapped to its closest point, then the attached vertices are placed again
+    // on their (projected) coarser edges, so finer borders stay on coarser ones.
+    // Vertices that did not move keep their place, so undoing every move gives
+    // the original back.
+    const auto settledPositions = [&](const Eigen::VectorXd& xs, std::vector<V3d>& p) {
+        positions(xs, p);
+        if (!builder.projectToSurface) return;
+        const auto project = [&](int id) {
+            const Vector3f q = builder.projectToSurface(pointOfId(p, id));
+            p[id] = ToV3d(q) / L;
+        };
+        const int S = static_cast<int>(sliders.size());
+#pragma omp parallel for schedule(static)
+        for (int i = 0; i < S; i++) {
+            if (xs[sliders[i].var] != x0[sliders[i].var]) project(sliders[i].id);
+        }
+        const int R = static_cast<int>(rings.size());
+#pragma omp parallel for schedule(static)
+        for (int i = 0; i < R; i++) {
+            const Ring& r = rings[i];
+            if (xs[r.var] != x0[r.var] || xs[r.var + 1] != x0[r.var + 1]) project(r.id);
+        }
+        for (int d : drivenOrder) {
+            const Driven& dr = driven[d];
+            const double t = dr.var >= 0 ? xs[dr.var] : dr.t;
+            p[dr.id] = (1.0 - t) * p[dr.a] + t * p[dr.b];
+        }
+    };
     std::vector<int> halvings(nv, 0);
     while (true) {
-        positions(x, pos);
+        settledPositions(x, pos);
         std::vector<char> bad(nv, 0);
         bool any = false;
         for (int j = 0; j < levels; j++) {
@@ -1655,7 +1685,7 @@ bool MeshletBuilder::relaxBorders()
             x[var] = halvings[var] > 5 ? x0[var] : x0[var] + 0.5 * (x[var] - x0[var]);
         }
     }
-    positions(x, pos);
+    settledPositions(x, pos);
     const std::vector<std::vector<Vector3f>> before = PositionsOf(builder.levels);
     for (int j = 0; j < levels; j++) {
         Mesh& m = builder.levels[j].simplified;
