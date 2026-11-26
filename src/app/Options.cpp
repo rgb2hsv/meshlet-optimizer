@@ -156,10 +156,14 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
     AddDisable(p, "snap-finer-levels", "do not move finer levels' border vertices onto coarser borders");
     AddDisable(p, "relax-borders", "skip the border relaxation");
     AddDisable(p, "isometric-uvs", "keep the packed LSCM atlases instead of isometric per-triangle UVs");
-    p.add_argument("--rigid-uv-iterations")
-        .help("Gauss-Newton iterations of the rigid UV relaxation (0: isometric triangles only)")
+    p.add_argument("--uv-iterations")
+        .help("Gauss-Newton iterations of the UV relaxation (0: isometric triangles only)")
         .scan<'i', int>()
-        .default_value(d.rigidUvIterations);
+        .default_value(d.uvIterations);
+    p.add_argument("--uv-area-weight")
+        .help("weight of the equal-area term of the UV relaxation (0: rigid triangles)")
+        .scan<'g', double>()
+        .default_value(d.uvAreaWeight);
 
     try {
         p.parse_args(argc, argv);
@@ -220,7 +224,8 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
     h.snapFinerLevels = !p.get<bool>("--no-snap-finer-levels");
     h.relaxBorders = !p.get<bool>("--no-relax-borders");
     h.isometricUvs = !p.get<bool>("--no-isometric-uvs");
-    h.rigidUvIterations = p.get<int>("--rigid-uv-iterations");
+    h.uvIterations = p.get<int>("--uv-iterations");
+    h.uvAreaWeight = p.get<double>("--uv-area-weight");
 
     if (h.cvt.regularization.maxTrianglesPerChart < 0 || h.stopAtRegions < 1 || h.maxDepth < 0 || h.maxCliqueSize < 2 ||
         h.lscmIterations < 1 || h.lscmPaddingRings < 0 || !(h.packPadding >= 0.0) || h.splitAboveFaces < 0 ||

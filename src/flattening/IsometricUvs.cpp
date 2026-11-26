@@ -143,11 +143,12 @@ void InscribeIsometricTriangles(const Mesh& mesh, const std::vector<int>& faceRe
     }
 }
 
-// Step 2 for one region: rigid motions of its triangles that bring shared corners together.
-int RelaxRegionRigidly(const std::vector<uint32_t>& faces, const std::vector<CornerPair>& pairs, const IsometricUvParams& params,
-                       std::vector<Triangle2>& uv)
+// Step 2 for one region: similarity motions of its triangles (translation, rotation, log scale) that bring
+// corresponding corners together and make areas proportional to 3D areas.
+int RelaxRegion(const std::vector<uint32_t>& faces, const std::vector<CornerPair>& pairs, const std::vector<double>& area3d,
+                const IsometricUvParams& params, std::vector<Triangle2>& uv)
 {
-    if (faces.size() < 2 || pairs.empty()) return 0;
+    if (faces.size() < 2) return 0;
     // The fixed triangle: UV centroid closest to the region's area-weighted UV centroid.
     Vec2d center = Vec2d::Zero();
     double area = 0.0;
@@ -166,67 +167,130 @@ int RelaxRegionRigidly(const std::vector<uint32_t>& faces, const std::vector<Cor
             fixedFace = f;
         }
     }
-    // Unknowns: (translation x, translation y, rotation) of every other triangle, about its own centroid.
+    // Log UV/3D scale of a triangle as it is now (its area is that scale squared times its 3D area).
+    const auto logScale = [&](uint32_t f) {
+        const double a = std::abs(SignedArea(uv[f]));
+        return (a > 0.0 && area3d[f] > 0.0) ? 0.5 * std::log(a / area3d[f]) : 0.0;
+    };
+    const double targetLogScale = logScale(fixedFace);
+    const bool authalic = params.areaWeight > 0.0;
+    // Unknowns of every other triangle, about its own centroid: translation x, y, rotation, log scale (only
+    // with the authalic term).
+    const int perFace = authalic ? 4 : 3;
     std::map<uint32_t, int> unknown;
     for (uint32_t f : faces) {
         if (f != fixedFace) unknown.emplace(f, static_cast<int>(unknown.size()));
     }
-    const int n = 3 * static_cast<int>(unknown.size());
-    std::map<uint32_t, Triangle2> rest;  // corners relative to the centroid, at rotation 0
+    const int n = perFace * static_cast<int>(unknown.size());
+    std::map<uint32_t, Triangle2> rest;  // corners relative to the centroid, at rotation 0 and scale 1
     std::map<uint32_t, Vec2d> origin;
+    std::map<uint32_t, double> restLogScale, targetSize;
     for (uint32_t f : faces) {
         const Vec2d c = Centroid(uv[f]);
         origin[f] = c;
         rest[f] = {uv[f][0] - c, uv[f][1] - c, uv[f][2] - c};
+        restLogScale[f] = logScale(f);
+        targetSize[f] = std::sqrt(std::max(area3d[f], 0.0)) * std::exp(targetLogScale);
     }
     Eigen::VectorXd x = Eigen::VectorXd::Zero(n);
+    const auto scaleOf = [&](int i) { return authalic ? std::exp(x[i + 3]) : 1.0; };
     const auto corner = [&](uint32_t f, int k) -> Vec2d {
         const auto it = unknown.find(f);
         if (it == unknown.end()) return origin[f] + rest[f][k];
-        const int i = 3 * it->second;
-        return origin[f] + Vec2d(x[i], x[i + 1]) + Rotate(rest[f][k], x[i + 2]);
+        const int i = perFace * it->second;
+        return origin[f] + Vec2d(x[i], x[i + 1]) + scaleOf(i) * Rotate(rest[f][k], x[i + 2]);
     };
-    // d corner / d rotation = perp(R rest).
-    const auto dRotation = [&](uint32_t f, int k) -> Vec2d { return Perp(Rotate(rest[f][k], x[3 * unknown.at(f) + 2])); };
 
-    int iteration = 0;
-    for (; iteration < params.rigidIterations; iteration++) {
-        std::vector<Eigen::Triplet<double>> entries;
-        entries.reserve(pairs.size() * 2 * 6);
-        Eigen::VectorXd r(2 * pairs.size());
+    const size_t rows = 2 * pairs.size() + (authalic ? unknown.size() : 0);
+    // Residuals (corner gaps, then the authalic terms) at the current x, and their Jacobian when asked for.
+    const auto assemble = [&](Eigen::VectorXd& r, std::vector<Eigen::Triplet<double>>* entries) {
+        r = Eigen::VectorXd::Zero(static_cast<int>(rows));
         for (size_t p = 0; p < pairs.size(); p++) {
             const CornerPair& cp = pairs[p];
             const Vec2d gap = corner(cp.faceA, cp.cornerA) - corner(cp.faceB, cp.cornerB);
-            r[2 * p] = gap.x();
-            r[2 * p + 1] = gap.y();
+            const int row = static_cast<int>(2 * p);
+            r[row] = gap.x();
+            r[row + 1] = gap.y();
+            if (!entries) continue;
             for (const auto& [f, k, sign] : {std::tuple(cp.faceA, cp.cornerA, 1.0), std::tuple(cp.faceB, cp.cornerB, -1.0)}) {
                 const auto it = unknown.find(f);
                 if (it == unknown.end()) continue;
-                const int i = 3 * it->second;
-                const Vec2d d = dRotation(f, k);
-                entries.emplace_back(static_cast<int>(2 * p), i, sign);
-                entries.emplace_back(static_cast<int>(2 * p + 1), i + 1, sign);
-                entries.emplace_back(static_cast<int>(2 * p), i + 2, sign * d.x());
-                entries.emplace_back(static_cast<int>(2 * p + 1), i + 2, sign * d.y());
+                const int i = perFace * it->second;
+                const Vec2d turned = scaleOf(i) * Rotate(rest[f][k], x[i + 2]);  // d corner / d log scale
+                const Vec2d dRotation = Perp(turned);
+                entries->emplace_back(row, i, sign);
+                entries->emplace_back(row + 1, i + 1, sign);
+                entries->emplace_back(row, i + 2, sign * dRotation.x());
+                entries->emplace_back(row + 1, i + 2, sign * dRotation.y());
+                if (authalic) {
+                    entries->emplace_back(row, i + 3, sign * turned.x());
+                    entries->emplace_back(row + 1, i + 3, sign * turned.y());
+                }
             }
         }
-        Eigen::SparseMatrix<double> J(static_cast<int>(2 * pairs.size()), n);
+        if (authalic) {
+            // areaWeight * target size * (log UV/3D scale - the fixed triangle's): linear in the log scale. The
+            // target size (the triangle's 3D size at the fixed triangle's scale) does not shrink with the triangle,
+            // so collapsing a triangle to close its gaps always costs.
+            int row = static_cast<int>(2 * pairs.size());
+            for (const auto& [f, index] : unknown) {
+                const int i = perFace * index;
+                const double w = params.areaWeight * targetSize[f];
+                r[row] = w * (restLogScale[f] + x[i + 3] - targetLogScale);
+                if (entries) entries->emplace_back(row, i + 3, w);
+                row++;
+            }
+        }
+    };
+
+    // Levenberg-Marquardt: a Gauss-Newton step (sparse normal equations, conjugate gradients) damped by
+    // lambda * diag(J^T J); a step is kept only when it lowers the cost, else lambda grows and the step is retried.
+    double lambda = 1e-4;
+    Eigen::VectorXd r;
+    assemble(r, nullptr);
+    double cost = r.squaredNorm();
+    int iteration = 0;
+    for (; iteration < params.iterations; iteration++) {
+        std::vector<Eigen::Triplet<double>> entries;
+        entries.reserve(pairs.size() * 2 * 8 + unknown.size());
+        assemble(r, &entries);
+        Eigen::SparseMatrix<double> J(static_cast<int>(rows), n);
         J.setFromTriplets(entries.begin(), entries.end());
-        Eigen::SparseMatrix<double> normal = J.transpose() * J;
-        // A triangle with no shared corners leaves its unknowns free: a tiny damping keeps the system definite.
+        const Eigen::SparseMatrix<double> normal = J.transpose() * J;
+        const Eigen::VectorXd rhs = -(J.transpose() * r);
+        // A triangle with no correspondences leaves its unknowns free: a tiny damping keeps the system definite.
         double meanDiagonal = 0.0;
         for (int i = 0; i < n; i++) meanDiagonal += normal.coeff(i, i);
         meanDiagonal = (n > 0) ? meanDiagonal / n : 1.0;
-        for (int i = 0; i < n; i++) normal.coeffRef(i, i) += 1e-9 * meanDiagonal + 1e-30;
-        const Eigen::VectorXd rhs = -(J.transpose() * r);
-        Eigen::ConjugateGradient<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper> cg;
-        cg.setMaxIterations(params.cgIterations);
-        cg.setTolerance(1e-12);
-        cg.compute(normal);
-        const Eigen::VectorXd dx = cg.solve(rhs);
-        if (!dx.allFinite()) break;
-        x += dx;
-        if (dx.lpNorm<Eigen::Infinity>() < params.tolerance) {
+        bool accepted = false, converged = false;
+        for (int attempt = 0; attempt < 12 && !accepted; attempt++) {
+            Eigen::SparseMatrix<double> damped = normal;
+            for (int i = 0; i < n; i++) damped.coeffRef(i, i) += lambda * normal.coeff(i, i) + 1e-9 * meanDiagonal + 1e-30;
+            Eigen::ConjugateGradient<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper> cg;
+            cg.setMaxIterations(params.cgIterations);
+            cg.setTolerance(1e-14);
+            cg.compute(damped);
+            const Eigen::VectorXd dx = cg.solve(rhs);
+            if (!dx.allFinite()) {
+                lambda *= 10.0;
+                continue;
+            }
+            const Eigen::VectorXd previous = x;
+            x += dx;
+            Eigen::VectorXd trial;
+            assemble(trial, nullptr);
+            const double trialCost = trial.squaredNorm();
+            if (std::isfinite(trialCost) && trialCost <= cost) {
+                accepted = true;
+                converged = dx.lpNorm<Eigen::Infinity>() < params.tolerance || cost - trialCost <= 1e-15 * cost;
+                cost = trialCost;
+                lambda = std::max(lambda / 3.0, 1e-12);
+            } else {
+                x = previous;
+                lambda *= 10.0;
+            }
+        }
+        if (!accepted || converged) {
             iteration++;
             break;
         }
@@ -238,7 +302,7 @@ int RelaxRegionRigidly(const std::vector<uint32_t>& faces, const std::vector<Cor
 }
 }  // namespace
 
-IsometricUvStats MakeIsometricUvs(Mesh& mesh, const std::vector<int>& faceRegion, const IsometricUvParams& params)
+IsometricUvStats MakeIsometricUvs(const Mesh& mesh, const std::vector<int>& faceRegion, std::vector<Vector2d>& out, const IsometricUvParams& params)
 {
     const size_t F = mesh.triIndexes.size();
     Expects(mesh.texcoords.size() == 3 * F, "MakeIsometricUvs: {} texture coordinates for {} triangles", mesh.texcoords.size(), F);
@@ -249,6 +313,11 @@ IsometricUvStats MakeIsometricUvs(Mesh& mesh, const std::vector<int>& faceRegion
     }
     InscribeIsometricTriangles(mesh, faceRegion, uv);
 
+    std::vector<double> area3d(F);
+    for (size_t f = 0; f < F; f++) {
+        const Vector3u& t = mesh.triIndexes[f];
+        area3d[f] = SignedArea(FlattenTriangle(mesh.vertexLocations[t[0]], mesh.vertexLocations[t[1]], mesh.vertexLocations[t[2]]));
+    }
     const std::vector<CornerPair> pairs = SharedCorners(mesh, faceRegion);
     IsometricUvStats stats;
     stats.meanGapBefore = MeanGap(uv, pairs);
@@ -257,12 +326,13 @@ IsometricUvStats MakeIsometricUvs(Mesh& mesh, const std::vector<int>& faceRegion
     for (uint32_t f = 0; f < F; f++) regionFaces[faceRegion[f]].push_back(f);
     for (const CornerPair& p : pairs) regionPairs[faceRegion[p.faceA]].push_back(p);
     for (auto& [region, faces] : regionFaces) {
-        stats.iterations = std::max(stats.iterations, RelaxRegionRigidly(faces, regionPairs[region], params, uv));
+        stats.iterations = std::max(stats.iterations, RelaxRegion(faces, regionPairs[region], area3d, params, uv));
     }
     stats.meanGapAfter = MeanGap(uv, pairs);
 
+    out.resize(3 * F);
     for (size_t f = 0; f < F; f++) {
-        for (int c = 0; c < 3; c++) mesh.texcoords[3 * f + c] = uv[f][c].cast<float>();
+        for (int c = 0; c < 3; c++) out[3 * f + c] = uv[f][c];
     }
     return stats;
 }

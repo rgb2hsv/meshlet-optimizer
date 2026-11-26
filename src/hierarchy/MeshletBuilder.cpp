@@ -623,12 +623,16 @@ bool MeshletBuilder::buildUvAtlases()
 
 bool MeshletBuilder::makeIsometricUvs()
 {
+    // Only the atlases buildUvAtlases() made: a mesh's own texture coordinates are kept as they are.
+    if (mesh.hasTexcoords()) return false;
     IsometricUvParams uvParams;
-    uvParams.rigidIterations = params_.rigidUvIterations;
+    uvParams.iterations = params_.uvIterations;
+    uvParams.areaWeight = params_.uvAreaWeight;
     bool any = false;
     for (LodLevel& level : levels) {
         if (!level.simplified.hasTexcoords()) continue;
-        MakeIsometricUvs(level.simplified, level.simplifiedFaceRegion, uvParams);
+        MakeIsometricUvs(level.simplified, level.simplifiedFaceRegion, level.isometricUvs, uvParams);
+        for (size_t c = 0; c < level.isometricUvs.size(); c++) level.simplified.texcoords[c] = level.isometricUvs[c].cast<float>();
         any = true;
     }
     return any;

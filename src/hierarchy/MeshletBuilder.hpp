@@ -86,9 +86,11 @@ struct MeshletParams {
     int borderLloydIterations = 200;
     double borderLloydMaxNormalChangeDegrees = 60.0;
     // makeIsometricUvs() after the UV atlases: every triangle's UVs isometric to its 3D triangle, then the
-    // triangles of each region moved rigidly to close the gaps between their shared corners (IsometricUvs.hpp).
+    // triangles of each region moved and scaled to close the gaps between corresponding corners and make areas
+    // proportional to 3D areas (IsometricUvs.hpp).
     bool isometricUvs = true;
-    int rigidUvIterations = 20;
+    int uvIterations = 20;
+    double uvAreaWeight = 1.0;
 };
 
 // Builds the hierarchy and writes it as a .mlod. The base charts are a ChartLayout of the input mesh.
@@ -246,8 +248,9 @@ private:
     // UVs. Every level has its own atlas; atlases of different levels overlap in UV space.
     bool buildUvAtlases();
 
-    // After buildUvAtlases() (isometricUvs): each level's per-corner UVs made isometric per triangle and
-    // relaxed rigidly per region (MakeIsometricUvs). Triangles stop sharing UVs.
+    // After buildUvAtlases() (isometricUvs; only when it built the atlases, never over a mesh's own UVs): each
+    // level's per-corner UVs made isometric per triangle and
+    // relaxed per region (MakeIsometricUvs), kept in double in LodLevel::isometricUvs. Triangles stop sharing UVs.
     bool makeIsometricUvs();
 
     MeshletParams params_;

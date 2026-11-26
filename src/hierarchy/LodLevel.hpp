@@ -16,5 +16,8 @@ struct LodLevel {
     std::vector<int> simplifiedFaceRegion;
     // Region of each vertex, -1 for vertices on a region boundary.
     std::vector<int> simplifiedVertexRegion;
+    // Isometric UVs in double precision, 3 per triangle (MeshletBuilder::makeIsometricUvs()); empty otherwise.
+    // simplified.texcoords holds them rounded to float, for the .mlod.
+    std::vector<Vector2d> isometricUvs;
 };
 }  // namespace mopt
