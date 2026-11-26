@@ -172,14 +172,18 @@ int RelaxRegion(const std::vector<uint32_t>& faces, const std::vector<CornerPair
         const double a = std::abs(SignedArea(uv[f]));
         return (a > 0.0 && area3d[f] > 0.0) ? 0.5 * std::log(a / area3d[f]) : 0.0;
     };
-    const double targetLogScale = logScale(fixedFace);
+    // The authalic target: the region's average log UV/3D scale, held fixed by the solve (a constraint).
+    double targetLogScale = 0.0;
+    for (uint32_t f : faces) targetLogScale += logScale(f);
+    targetLogScale /= static_cast<double>(faces.size());
     const bool authalic = params.areaWeight > 0.0;
-    // Unknowns of every other triangle, about its own centroid: translation x, y, rotation, log scale (only
-    // with the authalic term).
+    // Unknowns of every triangle, about its own centroid: translation x, y, rotation, log scale (only with the
+    // authalic term). The fixed triangle's translation and rotation are not solved for (its centroid and
+    // orientation stay); its scale is, like every other triangle's.
     const int perFace = authalic ? 4 : 3;
     std::map<uint32_t, int> unknown;
     for (uint32_t f : faces) {
-        if (f != fixedFace) unknown.emplace(f, static_cast<int>(unknown.size()));
+        if (authalic || f != fixedFace) unknown.emplace(f, static_cast<int>(unknown.size()));
     }
     const int n = perFace * static_cast<int>(unknown.size());
     std::map<uint32_t, Triangle2> rest;  // corners relative to the centroid, at rotation 0 and scale 1
@@ -229,9 +233,9 @@ int RelaxRegion(const std::vector<uint32_t>& faces, const std::vector<CornerPair
             }
         }
         if (authalic) {
-            // areaWeight * target size * (log UV/3D scale - the fixed triangle's): linear in the log scale. The
-            // target size (the triangle's 3D size at the fixed triangle's scale) does not shrink with the triangle,
-            // so collapsing a triangle to close its gaps always costs.
+            // areaWeight * target size * (log UV/3D scale - the region's average), every triangle: linear in the log scale. The
+            // target size (the triangle's 3D size at the average scale) does not shrink with the triangle, so
+            // collapsing a triangle to close its gaps always costs.
             int row = static_cast<int>(2 * pairs.size());
             for (const auto& [f, index] : unknown) {
                 const int i = perFace * index;
@@ -243,12 +247,37 @@ int RelaxRegion(const std::vector<uint32_t>& faces, const std::vector<CornerPair
         }
     };
 
-    // Levenberg-Marquardt: a Gauss-Newton step (sparse normal equations, conjugate gradients) damped by
-    // lambda * diag(J^T J); a step is kept only when it lowers the cost, else lambda grows and the step is retried.
-    double lambda = 1e-4;
+    // The average log scale stays the target: the log scales of the region's triangles sum to 0. The
+    // constraint is eliminated: the last triangle's log scale is minus the sum of the others' (x = T y), so the
+    // reduced normal equations stay symmetric positive definite for conjugate gradients. T also drops the fixed
+    // triangle's translation and rotation.
+    int dependent = -1;  // column of the eliminated log scale
+    if (authalic && unknown.size() > 1) dependent = perFace * static_cast<int>(unknown.size() - 1) + 3;
+    const auto unknownIt = unknown.find(fixedFace);
+    const int fixedBase = (unknownIt != unknown.end()) ? perFace * unknownIt->second : -1;
+    const auto solved = [&](int col) {
+        if (col == dependent) return false;
+        if (fixedBase >= 0 && col >= fixedBase && col < fixedBase + 3) return false;  // fixed triangle's translation, rotation
+        if (authalic && unknown.size() == 1 && col % perFace == 3) return false;     // a lone triangle keeps its scale
+        return true;
+    };
+    int m = 0;
+    for (int col = 0; col < n; col++) m += solved(col);
+    Eigen::SparseMatrix<double> T(n, m);
+    {
+        std::vector<Eigen::Triplet<double>> t;
+        for (int col = 0, j = 0; col < n; col++) {
+            if (!solved(col)) continue;
+            t.emplace_back(col, j, 1.0);
+            if (dependent >= 0 && col % perFace == 3) t.emplace_back(dependent, j, -1.0);
+            j++;
+        }
+        T.setFromTriplets(t.begin(), t.end());
+    }
+
+    // Gauss-Newton: each iteration linearizes the rotations and scales and solves the sparse normal equations
+    // with conjugate gradients.
     Eigen::VectorXd r;
-    assemble(r, nullptr);
-    double cost = r.squaredNorm();
     int iteration = 0;
     for (; iteration < params.iterations; iteration++) {
         std::vector<Eigen::Triplet<double>> entries;
@@ -256,41 +285,23 @@ int RelaxRegion(const std::vector<uint32_t>& faces, const std::vector<CornerPair
         assemble(r, &entries);
         Eigen::SparseMatrix<double> J(static_cast<int>(rows), n);
         J.setFromTriplets(entries.begin(), entries.end());
-        const Eigen::SparseMatrix<double> normal = J.transpose() * J;
-        const Eigen::VectorXd rhs = -(J.transpose() * r);
+        const Eigen::SparseMatrix<double> reduced = J * T;
+        Eigen::SparseMatrix<double> normal = reduced.transpose() * reduced;
+        const Eigen::VectorXd rhs = -(reduced.transpose() * r);
         // A triangle with no correspondences leaves its unknowns free: a tiny damping keeps the system definite.
         double meanDiagonal = 0.0;
-        for (int i = 0; i < n; i++) meanDiagonal += normal.coeff(i, i);
-        meanDiagonal = (n > 0) ? meanDiagonal / n : 1.0;
-        bool accepted = false, converged = false;
-        for (int attempt = 0; attempt < 12 && !accepted; attempt++) {
-            Eigen::SparseMatrix<double> damped = normal;
-            for (int i = 0; i < n; i++) damped.coeffRef(i, i) += lambda * normal.coeff(i, i) + 1e-9 * meanDiagonal + 1e-30;
-            Eigen::ConjugateGradient<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper> cg;
-            cg.setMaxIterations(params.cgIterations);
-            cg.setTolerance(1e-14);
-            cg.compute(damped);
-            const Eigen::VectorXd dx = cg.solve(rhs);
-            if (!dx.allFinite()) {
-                lambda *= 10.0;
-                continue;
-            }
-            const Eigen::VectorXd previous = x;
-            x += dx;
-            Eigen::VectorXd trial;
-            assemble(trial, nullptr);
-            const double trialCost = trial.squaredNorm();
-            if (std::isfinite(trialCost) && trialCost <= cost) {
-                accepted = true;
-                converged = dx.lpNorm<Eigen::Infinity>() < params.tolerance || cost - trialCost <= 1e-15 * cost;
-                cost = trialCost;
-                lambda = std::max(lambda / 3.0, 1e-12);
-            } else {
-                x = previous;
-                lambda *= 10.0;
-            }
-        }
-        if (!accepted || converged) {
+        for (int i = 0; i < m; i++) meanDiagonal += normal.coeff(i, i);
+        meanDiagonal = (m > 0) ? meanDiagonal / m : 1.0;
+        for (int i = 0; i < m; i++) normal.coeffRef(i, i) += 1e-9 * meanDiagonal + 1e-30;
+        Eigen::ConjugateGradient<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper> cg;
+        cg.setMaxIterations(params.cgIterations);
+        cg.setTolerance(1e-14);
+        cg.compute(normal);
+        const Eigen::VectorXd dy = cg.solve(rhs);
+        if (!dy.allFinite()) break;
+        const Eigen::VectorXd dx = T * dy;
+        x += dx;
+        if (dx.lpNorm<Eigen::Infinity>() < params.tolerance) {
             iteration++;
             break;
         }

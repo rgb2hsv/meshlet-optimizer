@@ -14,11 +14,13 @@
  *     springls relax step pulls neighboring springls together, and so that every triangle's area becomes
  *     proportional to its 3D area (authalic). A corner corresponds to its vertex's copy in the triangle across
  *     each of its two edges, when that triangle is in the same region. The triangle whose UV centroid is
- *     closest to the region's area-weighted UV centroid stays fixed, and sets the region's UV/3D scale.
- *     Unknowns per triangle: translation, rotation and log scale. Least squares on the corner gaps plus, per
- *     triangle, areaWeight * (its 3D size at the fixed triangle's scale) * (its log UV/3D scale - the fixed
- *     triangle's), solved by Levenberg-Marquardt: each iteration linearizes the rotations and scales, solves
- *     the damped sparse normal equations with conjugate gradients, and keeps the step only if the cost drops. areaWeight 0 keeps every triangle's size (rigid motions).
+ *     closest to the region's area-weighted UV centroid stays fixed. The region's average log UV/3D scale is
+ *     the authalic target and is held fixed as a constraint (the free triangles' log scales sum to zero,
+ *     eliminated through one of them). Unknowns per triangle: translation, rotation and log scale. Least
+ *     squares on the corner gaps plus, per triangle, areaWeight * (its 3D size at the average scale) * (its log
+ *     UV/3D scale - the average), solved by Gauss-Newton: each iteration linearizes the rotations and scales
+ *     and solves the sparse normal equations with conjugate gradients. areaWeight 0 keeps every triangle's
+ *     size (rigid motions).
  */
 #pragma once
 
