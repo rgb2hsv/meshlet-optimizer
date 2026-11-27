@@ -626,8 +626,7 @@ bool MeshletBuilder::makeIsometricUvs()
     // Only the atlases buildUvAtlases() made: a mesh's own texture coordinates are kept as they are.
     if (mesh.hasTexcoords()) return false;
     IsometricUvParams uvParams;
-    uvParams.iterations = params_.uvIterations;
-    uvParams.areaWeight = params_.uvAreaWeight;
+    uvParams.relaxSteps = params_.uvRelaxSteps;
     uvParams.fitToAtlas = params_.uvFitToAtlas;
     uvParams.enforceNoOverlaps = params_.uvEnforceNoOverlaps;
     bool any = false;

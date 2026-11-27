@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 360" width="1040" height="360" font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"><defs><marker id="arr-ff7b72" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#ff7b72"/></marker><marker id="arr-a371f7" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#a371f7"/></marker><marker id="arr-4493f8" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#4493f8"/></marker><marker id="arr-3fb950" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3fb950"/></marker></defs>
+<text x="12.0" y="19.0" font-size="12.5" fill="#e6edf3" text-anchor="start" font-weight="600">Forces on one chart's triangles</text>
+<polygon points="354.27,191.36 465.81,203.08 403.01,269.35" fill="#6e7681" stroke="#0d1117" stroke-width="1.00" stroke-linejoin="round" opacity="1.000" />
+<polygon points="322.30,216.60 387.33,281.63 277.28,333.87" fill="#6e7681" stroke="#0d1117" stroke-width="1.00" stroke-linejoin="round" opacity="1.000" />
+<polygon points="312.41,209.10 245.85,315.63 214.45,197.07" fill="#6e7681" stroke="#0d1117" stroke-width="1.00" stroke-linejoin="round" opacity="1.000" />
+<polygon points="314.48,208.84 215.85,212.28 238.26,114.70" fill="#6e7681" stroke="#0d1117" stroke-width="1.00" stroke-linejoin="round" opacity="1.000" />
+<polygon points="322.81,167.93 269.71,59.06 388.59,97.39" fill="#6e7681" stroke="#0d1117" stroke-width="1.00" stroke-linejoin="round" opacity="1.000" />
+<polygon points="354.43,188.83 404.11,106.16 466.31,181.01" fill="#6e7681" stroke="#0d1117" stroke-width="1.00" stroke-linejoin="round" opacity="1.000" />
+<polygon points="218.45,212.19 217.07,206.96 219.21,197.66 311.18,208.95" fill="#a371f7" stroke="#a371f7" stroke-width="1.00" stroke-linejoin="round" opacity="1.000" fill-opacity="0.55"/>
+<line x1="403.01" y1="269.35" x2="396.74" y2="274.26" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="387.33" y1="281.63" x2="393.60" y2="276.72" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="277.28" y1="333.87" x2="264.71" y2="326.57" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="245.85" y1="315.63" x2="258.42" y2="322.92" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="214.45" y1="197.07" x2="215.01" y2="203.16" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="215.85" y1="212.28" x2="215.29" y2="206.20" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="238.26" y1="114.70" x2="250.84" y2="92.45" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="269.71" y1="59.06" x2="257.13" y2="81.32" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="388.59" y1="97.39" x2="394.80" y2="100.90" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="404.11" y1="106.16" x2="397.90" y2="102.65" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="466.31" y1="181.01" x2="466.11" y2="189.84" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="465.81" y1="203.08" x2="466.01" y2="194.25" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="354.27" y1="191.36" x2="336.16" y2="195.67" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="322.30" y1="216.60" x2="328.16" y2="201.98" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="312.41" y1="209.10" x2="325.69" y2="200.11" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="314.48" y1="208.84" x2="326.21" y2="200.04" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="322.81" y1="167.93" x2="328.29" y2="189.82" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="354.43" y1="188.83" x2="336.20" y2="195.04" stroke="#ff7b72" stroke-width="1.40" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<line x1="249.06" y1="206.25" x2="244.51" y2="243.36" stroke="#a371f7" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-a371f7)"/>
+<line x1="249.06" y1="206.25" x2="253.62" y2="169.15" stroke="#a371f7" stroke-width="2.20" stroke-linecap="round" marker-end="url(#arr-a371f7)"/>
+<circle cx="249.06" cy="206.25" r="3.00" fill="#a371f7" stroke="none" stroke-width="1.00"/>
+<circle cx="407.70" cy="221.27" r="2.60" fill="#4493f8" stroke="none" stroke-width="1.00"/>
+<line x1="407.70" y1="221.27" x2="377.79" y2="208.80" stroke="#4493f8" stroke-width="2.00" stroke-linecap="round" marker-end="url(#arr-4493f8)"/>
+<path d="M308.24 101.29 A20.0 20.0 0 0 1 344.36 98.13" fill="none" stroke="#3fb950" stroke-width="1.8" marker-end="url(#arr-3fb950)"/>
+<circle cx="327.04" cy="108.13" r="2.60" fill="#3fb950" stroke="none" stroke-width="1.00"/>
+<text x="676.0" y="36.0" font-size="12.5" fill="#e6edf3" text-anchor="start" font-weight="600">Each triangle is a rigid body</text>
+<text x="676.0" y="54.0" font-size="12.0" fill="#9198a1" text-anchor="start" font-weight="400">(its angles and area stay its 3D ones, at the chart's scale)</text>
+<line x1="676.00" y1="92.00" x2="706.00" y2="92.00" stroke="#ff7b72" stroke-width="2.00" stroke-linecap="round" marker-end="url(#arr-ff7b72)"/>
+<text x="716.0" y="96.0" font-size="12.5" fill="#e6edf3" text-anchor="start" font-weight="600">Vertex ↔ vertex spring</text>
+<text x="716.0" y="113.0" font-size="12.0" fill="#9198a1" text-anchor="start" font-weight="400">corners that were one atlas vertex are pulled</text>
+<text x="716.0" y="128.0" font-size="12.0" fill="#9198a1" text-anchor="start" font-weight="400">together (weak while overlaps are pushed apart)</text>
+<line x1="676.00" y1="154.00" x2="706.00" y2="154.00" stroke="#a371f7" stroke-width="2.00" stroke-linecap="round" marker-end="url(#arr-a371f7)"/>
+<text x="716.0" y="158.0" font-size="12.5" fill="#e6edf3" text-anchor="start" font-weight="600">Repulsion impulse</text>
+<text x="716.0" y="175.0" font-size="12.0" fill="#9198a1" text-anchor="start" font-weight="400">an overlapping pair (shaded) is pushed apart,</text>
+<text x="716.0" y="190.0" font-size="12.0" fill="#9198a1" text-anchor="start" font-weight="400">∓j n at the centroid of their overlap</text>
+<line x1="676.00" y1="216.00" x2="706.00" y2="216.00" stroke="#4493f8" stroke-width="2.00" stroke-linecap="round" marker-end="url(#arr-4493f8)"/>
+<text x="716.0" y="220.0" font-size="12.5" fill="#e6edf3" text-anchor="start" font-weight="600">Velocity</text>
+<text x="716.0" y="237.0" font-size="12.0" fill="#9198a1" text-anchor="start" font-weight="400">forces and impulses change each body's</text>
+<text x="716.0" y="252.0" font-size="12.0" fill="#9198a1" text-anchor="start" font-weight="400">velocity, which carries over between steps</text>
+<line x1="676.00" y1="278.00" x2="706.00" y2="278.00" stroke="#3fb950" stroke-width="2.00" stroke-linecap="round" marker-end="url(#arr-3fb950)"/>
+<text x="716.0" y="282.0" font-size="12.5" fill="#e6edf3" text-anchor="start" font-weight="600">Spin</text>
+<text x="716.0" y="299.0" font-size="12.0" fill="#9198a1" text-anchor="start" font-weight="400">torques turn each triangle about its centroid;</text>
+<text x="716.0" y="314.0" font-size="12.0" fill="#9198a1" text-anchor="start" font-weight="400">its shape and size never change</text></svg>

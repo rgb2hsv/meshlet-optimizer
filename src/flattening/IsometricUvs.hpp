@@ -2,71 +2,67 @@
  * IsometricUvs.hpp
  *
  * Turns a mesh's per-corner UVs (a packed atlas, one chart per region) into isometric ones, in double
- * precision, in two steps:
+ * precision. Every triangle gets its own three UVs, similar to its 3D triangle and, within a chart, at one
+ * common scale, so every angle is its 3D angle and every area is the same multiple of its 3D area. The
+ * triangles are then arranged as rigid bodies:
  *
- *  1. Isometric triangles (as wedge's ChartDisconnectedConformalOp): every triangle is replaced by its 3D
- *     triangle laid flat (same angles), turned to line up with its atlas triangle and scaled to its area
- *     about the atlas triangle's centroid, then scaled about that centroid until it touches the atlas
- *     triangle from inside, and shrunk if needed to its region's median UV/3D scale. Triangles no longer
- *     share UVs: each has its own three.
- *  2. Relaxation: each triangle of a region moves as a similarity (a translation, a rotation and a uniform
- *     scale, so its angles stay its 3D angles) so that corresponding corners come together, the way the
- *     springls relax step pulls neighboring springls together, and so that every triangle's area becomes
- *     proportional to its 3D area (authalic). A corner corresponds to its vertex's copy in the triangle across
- *     each of its two edges, when that triangle is in the same region. The triangle whose UV centroid is
- *     closest to the region's area-weighted UV centroid stays fixed. The region's average log UV/3D scale is
- *     the authalic target and is held fixed as a constraint (the free triangles' log scales sum to zero,
- *     eliminated through one of them). Unknowns per triangle: translation, rotation and log scale. Least
- *     squares on the corner gaps plus, per triangle, areaWeight * (its 3D size at the average scale) * (its log
- *     UV/3D scale - the average), solved by Gauss-Newton: each iteration linearizes the rotations and scales
- *     and solves the sparse normal equations with conjugate gradients. areaWeight 0 keeps every triangle's
- *     size (rigid motions).
- *  2b. Constraint enforcement (enforceNoOverlaps): while two triangles of a region overlap, the relaxation runs
- *     again with one-sided springs between the centroids of neighboring triangles: a pair closer than its rest
- *     length is pushed apart. A pair sharing an edge starts at the centroid distance it has when the two lie flat
- *     side by side across that edge; a pair sharing only a vertex starts at its current centroid distance. Every
- *     round each rest length grows by springRestGrowth of its start and the spring strength doubles.
- *  3. Fit (fitToAtlas): each region is turned, scaled uniformly and moved so its bounding box fits
- *     tightly inside the bounding box of its chart in the atlas, centered, at whichever of eight turns (k * 22.5
- *     degrees) allows the largest scale: the packed charts' room is reused and
- *     relaxed charts cannot run into each other.
+ *  1. Placement: every triangle is its 3D triangle laid flat (same angles), scaled by its chart's scale
+ *     sqrt(chart's atlas area / chart's 3D area), turned so its corner 0 points the way its atlas triangle's
+ *     corner 0 does, and centered on its atlas triangle's centroid.
+ *  2. Simulation: per chart, the triangles are rigid bodies (a centroid and a rotation; shape and size never
+ *     change) with velocities that carry over from step to step. Every two corners of a chart that share an
+ *     atlas location (the same vertex) are joined by a spring of weight 1 / (N - 1), N the number of corners
+ *     there, so each corner's springs weigh 1 in all. Every step first computes, from the state at its start:
+ *     the spring forces (stiffness * weight * the gap between the two corners, times the lighter body's mass)
+ *     and their torques; and, for every pair of the chart's triangles that overlap (enforceNoOverlaps), a
+ *     normal impulse at the centroid of their overlap along the axis where they overlap least,
+ *       j = (-(1 + e) v_rel . n + baumgarte * depth / dt) / (1/m_A + 1/m_B + (r_A x n)^2 / I_A + (r_B x n)^2 / I_B),
+ *     kept >= 0, -j n on A and +j n on B. Then it applies them to every body's velocity and spin, damps them, and
+ *     integrates position and rotation (dt = 1; mass is UV area, I = m (|r_0|^2 + |r_1|^2 + |r_2|^2) / 12). The
+ *     first relaxSteps steps use springStiffness, closing the gaps; then up to repelSteps steps use the weak
+ *     repelSpringStiffness until no two triangles of the chart overlap by more than overlapTolerance.
+ *  3. Fit (fitToAtlas): each chart is turned, scaled uniformly and moved so its bounding box fits tightly
+ *     inside the bounding box of its chart in the atlas, centered, at whichever of eight turns (k * 22.5
+ *     degrees) allows the largest scale: the packed charts' room is reused and charts cannot run into each other.
  */
 #pragma once
 
 #include <mesh/Mesh.hpp>
 
+#include <array>
 #include <vector>
 
 namespace mopt
 {
 
 struct IsometricUvParams {
-    int iterations = 20;       // Gauss-Newton iterations of step 2 (0: step 1 only)
-    double areaWeight = 1.0;   // weight of the authalic term (0: triangles keep their size)
-    // Step 2b: one-sided springs push neighboring triangles' centroids apart (sharing an edge or a vertex). Each
-    // round every rest length grows by springRestGrowth of its starting value and the strength (from
-    // springStrength) doubles, for at most springRounds rounds, until no two triangles of a region overlap.
-    bool enforceNoOverlaps = true;
-    double springStrength = 0.1;
-    double springRestGrowth = 0.01;
-    double springMaxStrength = 12.8;  // the strength stops doubling here (Gauss-Newton diverges on very stiff springs)
-    int springRounds = 40;
-    bool fitToAtlas = true;    // step 3: each region turned, scaled uniformly and moved to fit tightly inside its atlas chart's box
-    double tolerance = 1e-12;  // step 2 stops once no unknown changes by more than this
-    int cgIterations = 2000;   // conjugate-gradient iterations per Gauss-Newton step
-};
-
-struct IsometricUvStats {
-    double meanGapBefore = 0.0;  // mean distance between corresponding corners after step 1
-    double meanGapAfter = 0.0;   // ... after step 2
-    int iterations = 0;          // Gauss-Newton iterations run (the most of any region)
-    int springRounds = 0;        // enforcement rounds run (the most of any region)
-    int overlappingRegions = 0;  // regions still overlapping after the last round
+    int relaxSteps = 400;                 // simulation steps with springStiffness (0, and no overlaps: step 1 only)
+    double springStiffness = 0.05;        // springs while closing the gaps
+    bool enforceNoOverlaps = true;        // overlapping triangles repel each other (impulses)
+    int repelSteps = 400;                 // at most this many further steps, until nothing overlaps
+    double repelSpringStiffness = 0.001;  // springs while separating overlaps: weak against the repulsion
+    double baumgarte = 0.5;               // the share of a pair's overlap its impulse separates per step
+    double restitution = 0.0;             // e
+    double damping = 0.1;                 // the share of every velocity lost per step
+    // Two triangles overlap when they do by more than this (UV units): half a texel at 4096^2, which leaves room
+    // for the fit into the atlas box (step 3) scaling a chart up.
+    double overlapTolerance = 0.5 / 4096;
+    bool fitToAtlas = true;  // step 3
 };
 
 // UVs from mesh.texcoords (the atlas, 3 per triangle) to uv (3 per triangle, double); faceRegion gives the
 // chart of every triangle.
-IsometricUvStats MakeIsometricUvs(const Mesh& mesh, const std::vector<int>& faceRegion, std::vector<Vector2d>& uv,
-                                  const IsometricUvParams& params = {});
+void MakeIsometricUvs(const Mesh& mesh, const std::vector<int>& faceRegion, std::vector<Vector2d>& uv, const IsometricUvParams& params = {});
+
+// How two triangles overlap. Whether their interiors meet (touching is not overlapping) and the polygon where they
+// do come from Geometric Tools' 2D triangle-triangle queries, ported in IsometricUvs.cpp. depth: the smallest
+// overlap of their projections on their six edge normals (0 when they do not overlap); axis: the unit normal it
+// is measured along, pointing from p to q; center: the centroid of the overlap polygon.
+struct TriangleOverlap {
+    double depth = 0.0;
+    Vector2d axis = Vector2d::Zero();
+    Vector2d center = Vector2d::Zero();
+};
+TriangleOverlap OverlapOf(const std::array<Vector2d, 3>& p, const std::array<Vector2d, 3>& q);
 
 }  // namespace mopt

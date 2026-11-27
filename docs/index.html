@@ -46,7 +46,8 @@
           <li><a href="#m-borders"><span class="num">3.9</span>Nested border simplification</a></li>
           <li><a href="#m-relax"><span class="num">3.10</span>Flat triangles and border relaxation</a></li>
           <li><a href="#m-uv"><span class="num">3.11</span>Texture coordinates</a></li>
-          <li><a href="#m-export"><span class="num">3.12</span>Export to the meshlet DAG</a></li>
+          <li><a href="#m-isouv"><span class="num">3.12</span>Isometric texture coordinates</a></li>
+          <li><a href="#m-export"><span class="num">3.13</span>Export to the meshlet DAG</a></li>
         </ol>
       </li>
       <li><a href="#results"><span class="num">4</span>Results</a>
@@ -57,6 +58,7 @@
           <li><a href="#r-uv"><span class="num">4.4</span>Texture fidelity</a></li>
           <li><a href="#r-atlas"><span class="num">4.5</span>Generated atlases</a></li>
           <li><a href="#r-validation"><span class="num">4.6</span>Validation</a></li>
+          <li><a href="#r-isouv"><span class="num">4.7</span>Isometric texture coordinates</a></li>
         </ol>
       </li>
       <li><a href="#limitations"><span class="num">5</span>Limitations</a></li>
@@ -108,7 +110,7 @@
   <li>a <strong>chart pipeline</strong> for building the levels: restricted-CVT base charts with topological clean-up (§<a href="#m-charts">3.3</a>), clique merging that keeps groups disk-shaped (§<a href="#m-cluster">3.5</a>), one global LSCM solve per level with padded charts (§<a href="#m-flatten">3.6</a>) and planar remeshing with a 3D fallback for folded regions (§<a href="#m-remesh">3.7</a>);</li>
   <li>a <strong>multi-level border relaxation</strong> that moves a border vertex and all its copies on every level as one variable, minimizing a CVT energy summed over the levels (§<a href="#m-relax">3.10</a>);</li>
   <li><strong>texture-aware</strong> construction: UV seams are region borders, so texture coordinates are interpolated, never invented, and untextured meshes get a per-level packed atlas (§<a href="#m-uv">3.11</a>);</li>
-  <li>an exact mapping of the hierarchy onto meshoptimizer's cluster DAG and LOD selection BVH, so the output runs in an existing mesh-shader viewer (§<a href="#m-export">3.12</a>).</li>
+  <li>an exact mapping of the hierarchy onto meshoptimizer's cluster DAG and LOD selection BVH, so the output runs in an existing mesh-shader viewer (§<a href="#m-export">3.13</a>).</li>
 </ul>
 
 <p>The program is a command-line tool, <code>meshlet-optimizer model.ply -o model.mlod</code>, built from the mapping pipeline of an earlier toolbox and stripped to what the hierarchy and export need. Section 2 reviews the building blocks, Section 3 describes the method stage by stage, Section 4 measures it on two models, and the appendices document the parameters, the file format and how to reproduce every figure.</p>
@@ -185,7 +187,7 @@
     <text x="555" y="277" text-anchor="middle" class="muted" font-size="11.5">no input UVs · §3.11</text>
     <rect class="box" x="660" y="238" width="150" height="50" rx="8"/>
     <text x="735" y="259" text-anchor="middle" font-weight="600">Write .mlod</text>
-    <text x="735" y="277" text-anchor="middle" class="muted" font-size="11.5">meshlet DAG · §3.12</text>
+    <text x="735" y="277" text-anchor="middle" class="muted" font-size="11.5">meshlet DAG · §3.13</text>
     <path class="arrow" d="M175 214V236" marker-end="url(#ah)"/>
     <path class="arrow" d="M250 263H278" marker-end="url(#ah)"/><path class="arrow" d="M450 263H478" marker-end="url(#ah)"/>
     <path class="arrow" d="M630 263H658" marker-end="url(#ah)"/>
@@ -294,7 +296,38 @@
   <figcaption><span class="fig">Figure 7.</span> Atlas packing (§3.11) of the sixteen charts of Figure 2(c). (a) Charts as flattened, in arbitrary orientation. (b) Each turned so that its minimum-area enclosing rectangle is axis-aligned. (c) MaxRects, largest first, into the smallest square found, scaled uniformly onto [0, 1]² with 2% padding: shapes and relative sizes are kept.</figcaption>
 </figure>
 
-<h3 id="m-export"><span class="num">3.12</span>Export to the meshlet DAG<a class="anchor" href="#m-export" aria-label="Link to this section"></a></h3>
+<h3 id="m-isouv"><span class="num">3.12</span>Isometric texture coordinates<a class="anchor" href="#m-isouv" aria-label="Link to this section"></a></h3>
+<p>A generated atlas (§<a href="#m-uv">3.11</a>) is conformal, so its triangles have the right angles only up to the conformal map's local scale, and their areas vary across a chart. For uses that need every triangle in UV to be the same shape and size as on the surface (texture-space simulation, measuring lengths in UV), each level's atlas is then made <em>isometric per triangle</em>: every triangle gets its own three UVs, similar to its 3D triangle, and the triangles of a chart are arranged to fit together as closely as their shapes allow. This runs after the atlases, by default, for meshes without input UVs; a mesh's own texture coordinates are never changed. The UVs are kept in double precision and rounded to float for the <code>.mlod</code>, whose vertices are split per distinct UV (§<a href="#m-export">3.13</a>).</p>
+
+<p><strong>1. Isometric triangles.</strong> Let <i>p</i><sub>0</sub>, <i>p</i><sub>1</sub>, <i>p</i><sub>2</sub> be a triangle's atlas UVs with centroid <i>c</i><sub>p</sub>, and <i>q</i><sub>0</sub>, <i>q</i><sub>1</sub>, <i>q</i><sub>2</sub> its 3D triangle laid flat (same edge lengths) with centroid <i>c</i><sub>q</sub>. The triangle is placed at</p>
+<p class="math"><i>u</i><sub>k</sub> = <i>c</i><sub>p</sub> + <i>s</i> <i>R</i>(<i>θ</i>) (<i>q</i><sub>k</sub> − <i>c</i><sub>q</sub>),&nbsp;&nbsp;&nbsp; <i>θ</i> = ∠(<i>q</i><sub>0</sub> − <i>c</i><sub>q</sub>, <i>p</i><sub>0</sub> − <i>c</i><sub>p</sub>),&nbsp;&nbsp;&nbsp; <i>s</i> = √(Σ<sub>chart</sub> <i>A</i><sub>atlas</sub> / Σ<sub>chart</sub> <i>A</i><sub>3D</sub>)</p>
+<p>with one scale <i>s</i> for the whole chart, so the chart keeps its atlas area. Every triangle now has its 3D angles and its 3D area times <i>s</i>², the same factor across the chart: the map is isometric up to the chart's scale and exactly area-proportional, and neither changes again (step 2 only moves and turns triangles, step 3 scales whole charts). Neighbours no longer meet: they leave gaps where the conformal atlas was stretched and overlap where it was compressed.</p>
+
+<p><strong>2. Rigid-body simulation.</strong> Every triangle <i>f</i> of a chart is a rigid body with a centroid <i>c</i><sub>f</sub>, an angle <i>θ</i><sub>f</sub>, a velocity <i>v</i><sub>f</sub> and a spin <i>ω</i><sub>f</sub>; its corner <i>k</i>, at <i>r</i><sub>f,k</sub> from the centroid after step 1, is at <i>x</i><sub>f,k</sub> = <i>c</i><sub>f</sub> + <i>R</i>(<i>θ</i><sub>f</sub>) <i>r</i><sub>f,k</sub>, so its shape and size never change. Its mass is its UV area over the chart's mean, <i>m</i><sub>f</sub> = <i>A</i><sub>f</sub> / <i>Ā</i>, and its moment of inertia about the centroid <i>I</i><sub>f</sub> = <i>m</i><sub>f</sub> Σ<sub>k</sub> ‖<i>r</i><sub>f,k</sub>‖² / 12. Two kinds of interaction act on the bodies.</p>
+<p><em>Springs</em> join the corners that were one vertex of the chart (that shared an atlas location): for a vertex whose <i>N</i> corners are all paired, each pair <i>a</i>, <i>b</i> of triangles <i>A</i>, <i>B</i> has weight <i>w</i> = 1/(<i>N</i> − 1), so every corner's springs weigh 1 in all, and pulls corner <i>a</i> with</p>
+<p class="math"><i>F</i><sub>a</sub> = <i>κ</i> <i>w</i> min(<i>m</i><sub>A</sub>, <i>m</i><sub>B</sub>) (<i>x</i><sub>b</sub> − <i>x</i><sub>a</sub>),&nbsp;&nbsp;&nbsp; <i>F</i><sub>b</sub> = −<i>F</i><sub>a</sub></p>
+<p>with the torque (<i>x</i><sub>a</sub> − <i>c</i><sub>A</sub>) × <i>F</i><sub>a</sub> on <i>A</i> (the lighter body's mass keeps a small triangle from being flung about). <em>Repulsion</em> acts on every pair of the chart's triangles whose interiors overlap. Whether they do (touching is not overlapping) and the polygon where they do come from Geometric Tools' 2D triangle–triangle queries <a href="#ref-eberly">[9]</a>, ported into the tool: a separating axis test on the six edge normals, and one triangle clipped by the other's three edges. <i>n</i> is the edge normal along which their projections overlap least (pointing from <i>A</i> to <i>B</i>) and <i>d</i> that overlap, and the impulse acts at <i>P</i>, the centroid of the overlap polygon, with <i>r</i><sub>A</sub> = <i>P</i> − <i>c</i><sub>A</sub>, <i>r</i><sub>B</sub> = <i>P</i> − <i>c</i><sub>B</sub>:</p>
+<p class="math"><i>v</i><sub>rel</sub> = (<i>v</i><sub>B</sub> + <i>ω</i><sub>B</sub> × <i>r</i><sub>B</sub>) − (<i>v</i><sub>A</sub> + <i>ω</i><sub>A</sub> × <i>r</i><sub>A</sub>),&nbsp;&nbsp;&nbsp; <i>j</i> = max(0, (−(1 + <i>e</i>) <i>v</i><sub>rel</sub>·<i>n</i> + <i>β d</i>/Δ<i>t</i>) / (<i>m</i><sub>A</sub><sup>−1</sup> + <i>m</i><sub>B</sub><sup>−1</sup> + (<i>r</i><sub>A</sub> × <i>n</i>)² <i>I</i><sub>A</sub><sup>−1</sup> + (<i>r</i><sub>B</sub> × <i>n</i>)² <i>I</i><sub>B</sub><sup>−1</sup>))</p>
+<p>and <i>J</i> = <i>j n</i> is applied as −<i>J</i> on <i>A</i> and +<i>J</i> on <i>B</i> (2D cross products are scalars, <i>ω</i> × <i>r</i> = <i>ω</i>(−<i>r</i><sub>y</sub>, <i>r</i><sub>x</sub>)). The Baumgarte term <i>β d</i>/Δ<i>t</i> is the separating velocity that removes the share <i>β</i> = 0.5 of the overlap per step; the restitution <i>e</i> is 0.</p>
+<p>Each step first computes every spring force and torque and every impulse from the state at its start, and only then applies them, so the result does not depend on the order of the pairs:</p>
+<p class="math"><i>v</i> ← (1 − <i>γ</i>)(<i>v</i> + <i>m</i><sup>−1</sup>(<i>F</i> Δ<i>t</i> + <i>J</i>)),&nbsp;&nbsp;&nbsp; <i>ω</i> ← (1 − <i>γ</i>)(<i>ω</i> + <i>I</i><sup>−1</sup>(<i>τ</i> Δ<i>t</i> + Σ <i>r</i> × <i>J</i>)),&nbsp;&nbsp;&nbsp; <i>c</i> ← <i>c</i> + <i>v</i> Δ<i>t</i>,&nbsp;&nbsp;&nbsp; <i>θ</i> ← <i>θ</i> + <i>ω</i> Δ<i>t</i></p>
+<p>with Δ<i>t</i> = 1 and damping <i>γ</i> = 0.1; velocities carry over from step to step. The simulation runs in two phases. First the springs alone, at <i>κ</i> = 0.05, for 400 steps (<code>--uv-relax-steps</code>), close the gaps; the repulsion is off here because the placement overlaps heavily where the atlas was compressed, and pushing those triangles apart before the springs had arranged them scattered them. Then the repulsion is on and the springs are weak, <i>κ</i> = 0.001, for at most 400 more steps, until no two triangles of the chart overlap by more than half a texel of a 4096² texture. The springs must be weak against the repulsion: a curved chart's gaps are about a hundred times that tolerance, and at <i>κ</i> = 0.01 the springs balanced the impulses while pairs still overlapped. Charts are simulated in parallel (OpenMP), each on its own; <code>--no-uv-repulsion</code> skips the repulsion.</p>
+
+<p><strong>3. Fit into the atlas.</strong> Finally each chart is turned, scaled uniformly and moved into the box its atlas chart occupied: of the eight turns <i>φ</i> = <i>k</i>π/8, the one allowing the largest scale min(<i>W</i>/<i>w</i>(<i>φ</i>), <i>H</i>/<i>h</i>(<i>φ</i>)) is kept (<i>W</i>×<i>H</i> the atlas box, <i>w</i>(<i>φ</i>)×<i>h</i>(<i>φ</i>) the turned chart's box, measured on its convex hull), and the chart is centred in the box. Charts therefore never overlap each other, and a uniform scale changes no angle or area ratio (<code>--no-uv-fit</code> skips it).</p>
+
+<figure id="fig-isometric">
+  <img src="figures/diagram-isometric.svg" alt="Forces on six rigid isometric triangles of one chart" width="1040" height="360" loading="lazy">
+  <figcaption><span class="fig">Figure 8.</span> The rigid-body simulation of §3.12 on six triangles of one chart, drawn mid-simulation with their gaps exaggerated. Red: springs pulling together the corners that were one atlas vertex. Purple: an overlapping pair (shaded) pushed apart by the impulse ∓<i>j n</i> at the centroid of their overlap. Blue: a body's velocity, which carries over between steps. Green: its spin about the centroid. Every triangle only moves and turns, so its angles and area stay its 3D ones at the chart's scale.</figcaption>
+</figure>
+
+<p><strong>Usage.</strong> Isometric UVs are on by default for meshes without texture coordinates:</p>
+<pre><code>meshlet-optimizer model.ply -o model.mlod                       # isometric UVs (default)
+meshlet-optimizer model.ply -o model.mlod --no-isometric-uvs    # keep the packed LSCM atlases
+meshlet-optimizer model.ply -o model.mlod --uv-relax-steps 800  # let the springs run longer
+meshlet-optimizer model.ply -o model.mlod --no-uv-repulsion --no-uv-fit
+meshlet-optimizer model.ply -o model.mlod --save-levels levels  # every level as a PLY with its UVs</code></pre>
+
+<h3 id="m-export"><span class="num">3.13</span>Export to the meshlet DAG<a class="anchor" href="#m-export" aria-label="Link to this section"></a></h3>
 <p><code>MlodWriter</code> maps the hierarchy onto meshlet-viewer's DAG:</p>
 <ul>
   <li>Every level's surface goes into one vertex buffer; the index buffer is level 0.</li>
@@ -306,11 +339,11 @@
 <p>Since swapping a group for its parent replaces exactly the faces inside the group's outer border, and that border is nested, any cut the renderer selects is crack-free.</p>
 <figure id="fig-dag">
   <img src="figures/diagram-dag.svg" alt="Region hierarchy as a meshlet DAG with one LOD cut" width="1040" height="320" loading="lazy">
-  <figcaption><span class="fig">Figure 8.</span> The region hierarchy as a meshlet DAG (§3.12). Every region is one meshlet; a group (rounded box) is the set of regions that merge into one parent and is swapped for it as a unit. White outlines mark one cut the renderer can select by screen-space error, mixing levels 0 and 1; nesting makes every such cut crack-free.</figcaption>
+  <figcaption><span class="fig">Figure 9.</span> The region hierarchy as a meshlet DAG (§3.13). Every region is one meshlet; a group (rounded box) is the set of regions that merge into one parent and is swapped for it as a unit. White outlines mark one cut the renderer can select by screen-space error, mixing levels 0 and 1; nesting makes every such cut crack-free.</figcaption>
 </figure>
 <figure id="fig-lodcut">
   <img src="figures/viewer-metasphere-lod-cut.png" alt="meshlet-viewer showing several LOD levels side by side" width="900" height="900" loading="lazy" style="max-width:560px;margin:0 auto">
-  <figcaption><span class="fig">Figure 9.</span> The metasphere <code>.mlod</code> in meshlet-viewer with automatic LOD selection (camera close, <code>--lod-error 8</code>): meshlets of three DAG levels, colored by level (lighter is finer), are drawn side by side. Black lines are meshlet outlines; meshlets of different levels meet along common borders, with no cracks.</figcaption>
+  <figcaption><span class="fig">Figure 10.</span> The metasphere <code>.mlod</code> in meshlet-viewer with automatic LOD selection (camera close, <code>--lod-error 8</code>): meshlets of three DAG levels, colored by level (lighter is finer), are drawn side by side. Black lines are meshlet outlines; meshlets of different levels meet along common borders, with no cracks.</figcaption>
 </figure>
 
 </section>
@@ -335,7 +368,7 @@
     <div><img src="figures/viewer-metasphere-level8.png" alt="metasphere level 8 in meshlet-viewer" width="700" height="700" loading="lazy"><span class="sub">level 8 · 8 meshlets</span></div>
     <div><img src="figures/viewer-metasphere-level9.png" alt="metasphere level 9 in meshlet-viewer" width="700" height="700" loading="lazy"><span class="sub">level 9 · 4 meshlets</span></div>
   </div>
-  <figcaption><span class="fig">Figure 10.</span> The metasphere <code>.mlod</code> in meshlet-viewer at every fixed DAG level, 0 through 9 (<code>--lod-level</code>), as the viewer draws it: every meshlet of a level in that level's color (lighter is finer), meshlet outlines in black, triangle wireframe in thin lines. One region is one meshlet. Borders coarsen along with the interiors, and every border is drawn along borders of the finer levels.</figcaption>
+  <figcaption><span class="fig">Figure 11.</span> The metasphere <code>.mlod</code> in meshlet-viewer at every fixed DAG level, 0 through 9 (<code>--lod-level</code>), as the viewer draws it: every meshlet of a level in that level's color (lighter is finer), meshlet outlines in black, triangle wireframe in thin lines. One region is one meshlet. Borders coarsen along with the interiors, and every border is drawn along borders of the finer levels.</figcaption>
 </figure>
 
 <div class="table-wrap">
@@ -366,7 +399,7 @@
     <div><img src="figures/viewer-cosplay-level5.png" alt="cosplay level 5 in meshlet-viewer" width="700" height="1000" loading="lazy"><span class="sub">level 5 · 353 regions</span></div>
     <div><img src="figures/viewer-cosplay-level12.png" alt="cosplay level 12 in meshlet-viewer" width="700" height="1000" loading="lazy"><span class="sub">level 12 · 299 regions</span></div>
   </div>
-  <figcaption><span class="fig">Figure 11.</span> The cosplay <code>.mlod</code> in meshlet-viewer at fixed DAG levels 1, 3, 5 and 12, each in its level's color with meshlet outlines. Regions never cross UV seams, so small texture islands (buttons, straps, eyes) remain separate meshlets up to the top level.</figcaption>
+  <figcaption><span class="fig">Figure 12.</span> The cosplay <code>.mlod</code> in meshlet-viewer at fixed DAG levels 1, 3, 5 and 12, each in its level's color with meshlet outlines. Regions never cross UV seams, so small texture islands (buttons, straps, eyes) remain separate meshlets up to the top level.</figcaption>
 </figure>
 
 <div class="table-wrap">
@@ -432,23 +465,53 @@
     <div><img src="figures/viewer-cosplay-uv-level4.png" alt="cosplay level 4 UV grid" width="700" height="1000" loading="lazy"><span class="sub">level 4</span></div>
     <div><img src="figures/viewer-cosplay-uv-level9.png" alt="cosplay level 9 UV grid" width="700" height="1000" loading="lazy"><span class="sub">level 9</span></div>
   </div>
-  <figcaption><span class="fig">Figure 12.</span> Cosplay's own texture coordinates in meshlet-viewer's UV grid (<code>--uv-grid</code>) at levels 0, 4 and 9. The grid follows the input atlas on every level: it stays continuous across meshlets inside each UV island and breaks only at the input's texture seams, which are region borders.</figcaption>
+  <figcaption><span class="fig">Figure 13.</span> Cosplay's own texture coordinates in meshlet-viewer's UV grid (<code>--uv-grid</code>) at levels 0, 4 and 9. The grid follows the input atlas on every level: it stays continuous across meshlets inside each UV island and breaks only at the input's texture seams, which are region borders.</figcaption>
 </figure>
 
 <h3 id="r-atlas"><span class="num">4.5</span>Generated atlases<a class="anchor" href="#r-atlas" aria-label="Link to this section"></a></h3>
 <figure id="fig-atlas">
   <img src="figures/metasphere-atlases.png" alt="UV atlases of metasphere levels 0, 3, 6 and 9" width="1224" height="300">
-  <figcaption><span class="fig">Figure 13.</span> Generated UV atlases of metasphere levels 0, 3, 6 and 9 (1,138, 111, 22 and 4 charts), one per level, each filling the unit square. Charts keep their shape and their relative size: all charts of a level share one scale.</figcaption>
+  <figcaption><span class="fig">Figure 14.</span> Generated UV atlases of metasphere levels 0, 3, 6 and 9 (1,138, 111, 22 and 4 charts), one per level, each filling the unit square. Charts keep their shape and their relative size: all charts of a level share one scale.</figcaption>
 </figure>
 <p>Every atlas was rasterized at 1024² and checked: all UVs lie in [0, 1]², the ratio of UV area to 3D area is identical for every chart of a level (min/median = max/median = 1.000), and no pixel is covered by two charts. Coverage falls from 62% at level 0, where many similar small charts pack tightly, to 40–45% for the few large, irregular charts of coarse levels. The two coarsest levels each contain one triangle folded by LSCM (level 9: 254 pixels of self-overlap within one chart), a limitation of flattening very large curved regions conformally.</p>
 
 <figure id="fig-viewer-atlas">
   <img src="figures/viewer-metasphere-atlas-level2.png" alt="metasphere level 2 generated atlas as a UV grid" width="900" height="900" loading="lazy" style="max-width:560px;margin:0 auto">
-  <figcaption><span class="fig">Figure 14.</span> The generated atlas of metasphere level 2 as a UV grid in meshlet-viewer: nearly square cells (LSCM is conformal), continuous inside every chart, breaking only at chart borders.</figcaption>
+  <figcaption><span class="fig">Figure 15.</span> The generated atlas of metasphere level 2 as a UV grid in meshlet-viewer: nearly square cells (LSCM is conformal), continuous inside every chart, breaking only at chart borders.</figcaption>
 </figure>
 
 <h3 id="r-validation"><span class="num">4.6</span>Validation<a class="anchor" href="#r-validation" aria-label="Link to this section"></a></h3>
 <p>The repository's test (<code>ctest</code>) builds the metasphere with <code>--check --check-cracks</code>: it fails unless the <code>.mlod</code> is written, has at least two levels and no pair of levels violates the nesting invariant. All 45 level pairs pass. The written file is read back with meshlet-viewer's own loader for both format versions, and the cosplay output was checked the same way. Output is deterministic: repeated runs write byte-identical metasphere files apart from the stored build time.</p>
+
+<h3 id="r-isouv"><span class="num">4.7</span>Isometric texture coordinates<a class="anchor" href="#r-isouv" aria-label="Link to this section"></a></h3>
+<p>The isometric UVs of §<a href="#m-isouv">3.12</a> are shown on the coarsest level of a unit icosphere (20,480 triangles, five clustering passes, default parameters): level 5 has 372 triangles in five charts, large and strongly curved, which is the hardest case for flattening a chart with undistorted triangles. Figure 16 shows the level's charts before (the packed LSCM atlas) and after (isometric triangles after the rigid-body simulation, fitted back into their atlas boxes); Table 5 compares them.</p>
+
+<figure id="fig-isometric-level5">
+  <div style="display:flex;gap:8px;justify-content:center">
+    <img src="figures/isometric-level5-atlas.webp" alt="Level 5 charts as the packed LSCM atlas" width="2048" height="2048" loading="lazy" style="width:50%;height:auto">
+    <img src="figures/isometric-level5-final.webp" alt="Level 5 charts with isometric texture coordinates" width="2048" height="2048" loading="lazy" style="width:50%;height:auto">
+  </div>
+  <figcaption><span class="fig">Figure 16.</span> Level 5 of a 20,480-triangle unit icosphere, five charts, each in its atlas box (green). (a) Before: the packed LSCM atlas, continuous inside every chart, with each triangle's angles distorted by the conformal map's scale. (b) After: every triangle similar to its 3D triangle at its chart's scale; springs have pulled together the corners that were one vertex and the repulsion has pushed overlapping triangles apart, leaving thin slits where the curved charts cannot close, and each chart is turned and scaled into its atlas box. Dots are triangle corners; red lines join corners that were one vertex.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+<caption><span class="fig">Table 5.</span> Level 5 of the icosphere before and after the isometric step (unit-square UVs). Area ratio: UV area over 3D area of each triangle, divided by its chart's median. Overlaps: pairs of triangles whose interiors overlap by more than one texel of a 4096² texture covering the unit square.</caption>
+<thead><tr><th></th><th class="n">LSCM atlas</th><th class="n">Isometric</th></tr></thead>
+<tbody>
+<tr><td>Triangles / charts</td><td class="n">372 / 5</td><td class="n">372 / 5</td></tr>
+<tr><td>Worst angle error</td><td class="n">0.21 rad (12°)</td><td class="n">9 × 10<sup>−8</sup> rad</td></tr>
+<tr><td>Flipped triangles</td><td class="n">0</td><td class="n">0</td></tr>
+<tr><td>Overlapping pairs (over one texel at 4096²)</td><td class="n">0</td><td class="n">0</td></tr>
+<tr><td>Deepest overlap (texels at 4096²)</td><td class="n">0</td><td class="n">0.50</td></tr>
+<tr><td>Overlaps across charts</td><td class="n">0</td><td class="n">0</td></tr>
+<tr><td>Area ratio, min–max</td><td class="n">0.57–2.63</td><td class="n">1.00–1.00</td></tr>
+<tr><td>Gap between corresponding corners, mean / max</td><td class="n">0 / 0</td><td class="n">0.0036 / 0.023</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Every triangle's angles now match its 3D triangle to 10<sup>−7</sup> rad, against up to 12° in the conformal atlas, and no triangle is flipped. Its area is exactly its chart's multiple of its 3D area (an area ratio of 1.00 everywhere, against 0.57–2.63 in the atlas), because the triangles never change size after step 1. No two triangles overlap by more than half a texel of a 4096² texture, where the simulation stops. The price is gaps: around the interior vertices of these charts the 3D angles sum to noticeably less than 2π, so rigid triangles cannot all meet, and the shortfall is left as thin slits along shared edges (mean gap 0.0036 in the unit square, about 15 texels at 4096²). Finer charts are flatter, and the gaps shrink with them: on the same mesh the mean gap is 0.0011 at level 4 and 6 × 10<sup>−6</sup> at level 0 (20,480 triangles), and no level has a pair overlapping by more than a texel. A chart this curved is better split than flattened; the hierarchy splits regions by triangle count only (§<a href="#m-split">3.8</a>), not by curvature.</p>
 </section>
 
 <section id="limitations">
@@ -478,6 +541,7 @@
   <li id="ref-liu">Y. Liu, W. Wang, B. Lévy, F. Sun, D.-M. Yan, L. Lu, C. Yang. <em>On Centroidal Voronoi Tessellation — Energy Smoothness and Fast Computation.</em> ACM Transactions on Graphics 28(4), 2009.</li>
   <li id="ref-jylanki">J. Jylänki. <em>A Thousand Ways to Pack the Bin — A Practical Approach to Two-Dimensional Rectangle Bin Packing.</em> 2010.</li>
   <li id="ref-sander">P. V. Sander, J. Snyder, S. J. Gortler, H. Hoppe. <em>Texture Mapping Progressive Meshes.</em> SIGGRAPH 2001.</li>
+  <li id="ref-eberly">D. Eberly. <em>Geometric Tools</em>, <code>IntrTriangle2Triangle2.h</code>, and <em>The Method of Separating Axes</em>. <a href="https://www.geometrictools.com">geometrictools.com</a>.</li>
 </ol>
 </section>
 
@@ -499,7 +563,7 @@ meshlets cosplay.mlod          <span class="c"># meshlet-viewer</span></code></p
 <h3 id="a-options"><span class="num">B</span>Parameters<a class="anchor" href="#a-options" aria-label="Link to this section"></a></h3>
 <div class="table-wrap">
 <table>
-<caption><span class="fig">Table 5.</span> Command-line parameters and defaults (<code>meshlet-optimizer --help</code>).</caption>
+<caption><span class="fig">Table 6.</span> Command-line parameters and defaults (<code>meshlet-optimizer --help</code>).</caption>
 <thead><tr><th>Option</th><th class="n">Default</th><th>Effect</th></tr></thead>
 <tbody>
 <tr><td><code>--chart-triangles</code></td><td class="n">256</td><td>Largest base chart, in triangles touching it; sets the seed count (§3.3).</td></tr>
@@ -520,6 +584,10 @@ meshlets cosplay.mlod          <span class="c"># meshlet-viewer</span></code></p
 <tr><td><code>--flat-min-angle</code></td><td class="n">1°</td><td>Caps with a smaller angle are flipped or split (§3.10).</td></tr>
 <tr><td><code>--border-lloyd-iterations</code></td><td class="n">200</td><td>L-BFGS-B iterations of the border relaxation.</td></tr>
 <tr><td><code>--pack-padding</code></td><td class="n">0.02</td><td>Space around each chart in a generated atlas (§3.11).</td></tr>
+<tr><td><code>--no-isometric-uvs</code></td><td class="n"></td><td>Keep the packed LSCM atlases (§3.12).</td></tr>
+<tr><td><code>--uv-relax-steps</code></td><td class="n">400</td><td>Rigid-body steps in which springs pull the isometric UV triangles together.</td></tr>
+<tr><td><code>--no-uv-repulsion</code></td><td class="n"></td><td>Skip the repulsion that pushes overlapping UV triangles apart.</td></tr>
+<tr><td><code>--no-uv-fit</code></td><td class="n"></td><td>Do not turn and scale each chart into its atlas box.</td></tr>
 <tr><td><code>--no-project</code></td><td class="n"></td><td>Keep resampled vertices off the input surface.</td></tr>
 <tr><td><code>--check</code> / <code>--check-cracks</code></td><td class="n"></td><td>Fail unless written; verify the nesting invariant for all level pairs.</td></tr>
 <tr><td><code>--save-levels DIR</code></td><td class="n"></td><td>Write every level as a PLY with UVs and regions.</td></tr>
@@ -532,7 +600,7 @@ meshlets cosplay.mlod          <span class="c"># meshlet-viewer</span></code></p
 <p>A <code>.mlod</code> file is a cereal portable binary archive, readable on either endianness: an endianness byte, the magic <code>"MLOD"</code> and a version, then the fields below in order. Arrays are a 64-bit count followed by raw 32-bit words (8-bit for byte arrays). Version 1 has no texture coordinates; version 2, written whenever the levels have UVs, adds one per vertex right after the vertices.</p>
 <div class="table-wrap">
 <table>
-<caption><span class="fig">Table 6.</span> Archive layout (meshlet-viewer <code>src/meshlet_file.cpp</code>).</caption>
+<caption><span class="fig">Table 7.</span> Archive layout (meshlet-viewer <code>src/meshlet_file.cpp</code>).</caption>
 <thead><tr><th>Field</th><th>Type</th><th>Content</th></tr></thead>
 <tbody>
 <tr><td>settings</td><td>scalars</td><td>Meshlet builder settings; for meshlet-optimizer files, the largest meshlet written.</td></tr>
@@ -568,7 +636,7 @@ meshlets cosplay.mlod          <span class="c"># meshlet-viewer</span></code></p
 </div>
 
 <h3 id="a-figures"><span class="num">E</span>Reproducing the figures<a class="anchor" href="#a-figures" aria-label="Link to this section"></a></h3>
-<p>Every figure is generated by a script in <code>docs/figures</code> that needs nothing beyond the Python standard library. The step diagrams (Figures 2–8) run simplified planar versions of the tool's algorithms on a small Delaunay mesh (<code>make_diagrams.py</code>). The UV atlases are drawn from <code>--save-levels</code> output with a small rasterizer and a zlib PNG writer (<code>plyfig.py</code>, <code>make_atlas.py</code>). Every rendering of the meshes is a meshlet-viewer screenshot of the <code>.mlod</code> files themselves, taken with its <code>--screenshot</code> option (<code>make_viewer_shots.py</code>).</p>
+<p>Every figure is generated by a script in <code>docs/figures</code> that needs nothing beyond the Python standard library. The step diagrams (Figures 2–9) run simplified planar versions of the tool's algorithms on a small Delaunay mesh (<code>make_diagrams.py</code>). The UV atlases are drawn from <code>--save-levels</code> output with a small rasterizer and a zlib PNG writer (<code>plyfig.py</code>, <code>make_atlas.py</code>). The rigid-body diagram (Figure 8) is drawn by <code>make_isometric.py diagram</code>, which with <code>levels</code> also draws and checks saved levels before and after the isometric step; the two panels of Figure 16 were rendered offscreen with NanoVG from the icosphere's levels. Every rendering of the meshes is a meshlet-viewer screenshot of the <code>.mlod</code> files themselves, taken with its <code>--screenshot</code> option (<code>make_viewer_shots.py</code>).</p>
 <pre><code>meshlet-optimizer assets/model/metasphere.ply -o metasphere.mlod --save-levels levels/metasphere
 meshlet-optimizer assets/model/cosplay.ply -o cosplay.mlod
 cd docs/figures

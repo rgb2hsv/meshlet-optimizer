@@ -85,14 +85,12 @@ struct MeshletParams {
     bool relaxBorders = true;
     int borderLloydIterations = 200;
     double borderLloydMaxNormalChangeDegrees = 60.0;
-    // makeIsometricUvs() after the UV atlases: every triangle's UVs isometric to its 3D triangle, then the
-    // triangles of each region moved and scaled to close the gaps between corresponding corners and make areas
-    // proportional to 3D areas (IsometricUvs.hpp).
+    // makeIsometricUvs() after the UV atlases: every triangle's UVs isometric to its 3D triangle at its chart's
+    // scale, then the triangles of each chart simulated as rigid bodies that springs pull together and that repel
+    // each other where they overlap (uvEnforceNoOverlaps), then each chart fitted into its atlas box
+    // (uvFitToAtlas) (IsometricUvs.hpp).
     bool isometricUvs = true;
-    int uvIterations = 20;
-    double uvAreaWeight = 1.0;
-    // After the relaxation, each region scaled uniformly and moved to fit tightly inside its atlas chart's box.
-    // After the relaxation, springs push neighboring triangles apart, harder each round, until none overlap.
+    int uvRelaxSteps = 400;
     bool uvEnforceNoOverlaps = true;
     bool uvFitToAtlas = true;
 };
