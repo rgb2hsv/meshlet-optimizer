@@ -155,6 +155,16 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
         "keep every level's region borders at full resolution (also skips the flat-triangle fix and relaxation)");
     AddDisable(p, "snap-finer-levels", "do not move finer levels' border vertices onto coarser borders");
     AddDisable(p, "relax-borders", "skip the border relaxation");
+    AddDisable(p, "isometric-uvs", "keep the packed LSCM atlases instead of isometric per-triangle UVs");
+    AddDisable(p, "uv-fit", "do not scale and move each relaxed chart to fit its atlas chart");
+    p.add_argument("--uv-iterations")
+        .help("Gauss-Newton iterations of the UV relaxation (0: isometric triangles only)")
+        .scan<'i', int>()
+        .default_value(d.uvIterations);
+    p.add_argument("--uv-area-weight")
+        .help("weight of the equal-area term of the UV relaxation (0: rigid triangles)")
+        .scan<'g', double>()
+        .default_value(d.uvAreaWeight);
 
     try {
         p.parse_args(argc, argv);
@@ -214,6 +224,10 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
     h.simplifyBorders = !p.get<bool>("--no-simplify-borders");
     h.snapFinerLevels = !p.get<bool>("--no-snap-finer-levels");
     h.relaxBorders = !p.get<bool>("--no-relax-borders");
+    h.isometricUvs = !p.get<bool>("--no-isometric-uvs");
+    h.uvIterations = p.get<int>("--uv-iterations");
+    h.uvAreaWeight = p.get<double>("--uv-area-weight");
+    h.uvFitToAtlas = !p.get<bool>("--no-uv-fit");
 
     if (h.cvt.regularization.maxTrianglesPerChart < 0 || h.stopAtRegions < 1 || h.maxDepth < 0 || h.maxCliqueSize < 2 ||
         h.lscmIterations < 1 || h.lscmPaddingRings < 0 || !(h.packPadding >= 0.0) || h.splitAboveFaces < 0 ||

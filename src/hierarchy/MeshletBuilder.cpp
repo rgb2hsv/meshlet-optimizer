@@ -288,6 +288,7 @@ void MeshletBuilder::build(const Mesh& input, const StatusHandler& status)
         if (params_.relaxBorders) stage("Border relaxation", [&] { return relaxBorders(); });
     }
     stage("UV atlases", [&] { return buildUvAtlases(); });
+    if (params_.isometricUvs) stage("Isometric UVs", [&] { return makeIsometricUvs(); });
     stage("Write " + mlodFile_.string(), [&] { return writeMlod(); });
 }
 }  // namespace mopt
@@ -618,6 +619,26 @@ bool MeshletBuilder::buildUvAtlases()
         Expects(missing == 0, "Level {}: {} faces have no chart in the UV atlas", level.level, missing);
     }
     return true;
+}
+
+bool MeshletBuilder::makeIsometricUvs()
+{
+    // Only the atlases buildUvAtlases() made: a mesh's own texture coordinates are kept as they are.
+    if (mesh.hasTexcoords()) return false;
+    IsometricUvParams uvParams;
+    uvParams.iterations = params_.uvIterations;
+    uvParams.areaWeight = params_.uvAreaWeight;
+    uvParams.fitToAtlas = params_.uvFitToAtlas;
+    bool any = false;
+    for (LodLevel& level : levels) {
+        if (!level.simplified.hasTexcoords()) continue;
+        level.atlasUvs.resize(level.simplified.texcoords.size());
+        for (size_t c = 0; c < level.atlasUvs.size(); c++) level.atlasUvs[c] = level.simplified.texcoords[c].cast<double>();
+        MakeIsometricUvs(level.simplified, level.simplifiedFaceRegion, level.isometricUvs, uvParams);
+        for (size_t c = 0; c < level.isometricUvs.size(); c++) level.simplified.texcoords[c] = level.isometricUvs[c].cast<float>();
+        any = true;
+    }
+    return any;
 }
 
 bool MeshletBuilder::sampleLevel()

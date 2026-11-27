@@ -27,6 +27,7 @@
 #include <charts/CvtSegmentation.hpp>
 #include <core/Types.hpp>
 #include <flattening/ChartLayout.hpp>
+#include <flattening/IsometricUvs.hpp>
 #include <hierarchy/BorderSimplification.hpp>
 #include <hierarchy/LodLevel.hpp>
 #include <hierarchy/RegionHierarchy.hpp>
@@ -84,6 +85,14 @@ struct MeshletParams {
     bool relaxBorders = true;
     int borderLloydIterations = 200;
     double borderLloydMaxNormalChangeDegrees = 60.0;
+    // makeIsometricUvs() after the UV atlases: every triangle's UVs isometric to its 3D triangle, then the
+    // triangles of each region moved and scaled to close the gaps between corresponding corners and make areas
+    // proportional to 3D areas (IsometricUvs.hpp).
+    bool isometricUvs = true;
+    int uvIterations = 20;
+    double uvAreaWeight = 1.0;
+    // After the relaxation, each region scaled uniformly and moved to fit tightly inside its atlas chart's box.
+    bool uvFitToAtlas = true;
 };
 
 // Builds the hierarchy and writes it as a .mlod. The base charts are a ChartLayout of the input mesh.
@@ -243,6 +252,11 @@ private:
     // packed (ChartBinPack) into the unit square, aspect ratios kept, and stored as the level's per-corner
     // UVs. Every level has its own atlas; atlases of different levels overlap in UV space.
     bool buildUvAtlases();
+
+    // After buildUvAtlases() (isometricUvs; only when it built the atlases, never over a mesh's own UVs): each
+    // level's per-corner UVs made isometric per triangle and
+    // relaxed per region (MakeIsometricUvs), kept in double in LodLevel::isometricUvs. Triangles stop sharing UVs.
+    bool makeIsometricUvs();
 
     MeshletParams params_;
     std::filesystem::path mlodFile_;
