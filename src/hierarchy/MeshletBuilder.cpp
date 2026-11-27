@@ -629,6 +629,7 @@ bool MeshletBuilder::makeIsometricUvs()
     uvParams.iterations = params_.uvIterations;
     uvParams.areaWeight = params_.uvAreaWeight;
     uvParams.fitToAtlas = params_.uvFitToAtlas;
+    uvParams.enforceNoOverlaps = params_.uvEnforceNoOverlaps;
     bool any = false;
     for (LodLevel& level : levels) {
         if (!level.simplified.hasTexcoords()) continue;

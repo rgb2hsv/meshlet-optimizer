@@ -92,6 +92,8 @@ struct MeshletParams {
     int uvIterations = 20;
     double uvAreaWeight = 1.0;
     // After the relaxation, each region scaled uniformly and moved to fit tightly inside its atlas chart's box.
+    // After the relaxation, springs push neighboring triangles apart, harder each round, until none overlap.
+    bool uvEnforceNoOverlaps = true;
     bool uvFitToAtlas = true;
 };
 

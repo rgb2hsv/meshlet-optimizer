@@ -11,6 +11,8 @@
 #include <limits>
 #include <map>
 #include <tuple>
+#include <unordered_set>
+#include <unordered_map>
 #include <utility>
 
 namespace mopt
@@ -217,10 +219,112 @@ void InscribeIsometricTriangles(const Mesh& mesh, const std::vector<int>& faceRe
     }
 }
 
+// How deep the interiors of two triangles overlap: the smallest overlap of their projections on their six
+// edge normals (separating axes), 0 when some axis separates them.
+double OverlapDepth(const Triangle2& p, const Triangle2& q)
+{
+    double depth = std::numeric_limits<double>::infinity();
+    for (const Triangle2* t : {&p, &q}) {
+        for (int e = 0; e < 3; e++) {
+            const Vec2d edge = (*t)[(e + 1) % 3] - (*t)[e];
+            const double length = edge.norm();
+            if (length <= 0.0) continue;
+            const Vec2d axis = Perp(edge) / length;
+            double pMin = std::numeric_limits<double>::infinity(), pMax = -pMin, qMin = pMin, qMax = -pMin;
+            for (const Vec2d& v : p) {
+                pMin = std::min(pMin, axis.dot(v));
+                pMax = std::max(pMax, axis.dot(v));
+            }
+            for (const Vec2d& v : q) {
+                qMin = std::min(qMin, axis.dot(v));
+                qMax = std::max(qMax, axis.dot(v));
+            }
+            depth = std::min(depth, std::min(pMax - qMin, qMax - pMin));
+            if (depth <= 0.0) return 0.0;
+        }
+    }
+    return depth;
+}
+
+// Whether any two triangles of `faces` overlap by more than a billionth of the smaller one's size.
+bool RegionHasOverlap(const std::vector<uint32_t>& faces, const std::vector<Triangle2>& uv)
+{
+    std::vector<std::pair<Vec2d, Vec2d>> boxes(faces.size());
+    for (size_t i = 0; i < faces.size(); i++) {
+        const Triangle2& t = uv[faces[i]];
+        boxes[i] = {t[0].cwiseMin(t[1]).cwiseMin(t[2]), t[0].cwiseMax(t[1]).cwiseMax(t[2])};
+    }
+    for (size_t i = 0; i < faces.size(); i++) {
+        for (size_t j = i + 1; j < faces.size(); j++) {
+            if ((boxes[i].second.array() < boxes[j].first.array()).any() || (boxes[j].second.array() < boxes[i].first.array()).any()) continue;
+            const Triangle2 &p = uv[faces[i]], &q = uv[faces[j]];
+            const double size = std::sqrt(std::min(std::abs(SignedArea(p)), std::abs(SignedArea(q))));
+            if (size > 0.0 && OverlapDepth(p, q) > 1e-9 * size) return true;
+        }
+    }
+    return false;
+}
+
+// One-sided springs between the centroids of triangles that share an edge: a pair closer than its rest
+// length (the centroid distance of the two triangles laid flat side by side across their shared edge, where
+// they touch without overlapping) is pushed apart with `strength`; a pair farther apart feels nothing.
+struct NeighborSprings {
+    std::vector<std::pair<uint32_t, uint32_t>> pairs;
+    std::vector<double> rest;
+    double strength = 0.0;
+};
+
+// The springs of one region from its corresponding corners (SharedCorners lists both corners of a shared edge,
+// one after the other), with rest lengths from the triangles' current UV shapes.
+NeighborSprings MakeNeighborSprings(const std::vector<CornerPair>& corners, const std::vector<Triangle2>& uv, double strength)
+{
+    NeighborSprings springs;
+    springs.strength = strength;
+    for (size_t p = 0; p + 1 < corners.size(); p += 2) {
+        const CornerPair &u = corners[p], &v = corners[p + 1];
+        if (u.faceA != v.faceA || u.faceB != v.faceB) continue;
+        // Each centroid's offset from the shared edge (u -> v) in its own triangle: along it and away from it.
+        const auto offset = [&](uint32_t f, int ku, int kv) {
+            const Vec2d a = uv[f][ku], e = (uv[f][kv] - a).normalized(), c = Centroid(uv[f]) - a;
+            return Vec2d(c.dot(e), std::abs(e.x() * c.y() - e.y() * c.x()));
+        };
+        const Vec2d oa = offset(u.faceA, u.cornerA, v.cornerA), ob = offset(u.faceB, u.cornerB, v.cornerB);
+        springs.pairs.emplace_back(u.faceA, u.faceB);
+        springs.rest.push_back(std::hypot(oa.x() - ob.x(), oa.y() + ob.y()));
+    }
+    return springs;
+}
+
+// Adds a spring for every pair of the region's triangles that share exactly one vertex (they share no edge),
+// with their current centroid distance as rest length.
+void AddVertexNeighborSprings(const Mesh& mesh, const std::vector<uint32_t>& faces, const std::vector<Triangle2>& uv, NeighborSprings& springs)
+{
+    std::unordered_map<uint32_t, std::vector<uint32_t>> facesAt;  // mesh vertex -> the region's faces around it
+    for (uint32_t f : faces) {
+        for (int c = 0; c < 3; c++) facesAt[mesh.triIndexes[f][c]].push_back(f);
+    }
+    std::unordered_set<uint64_t> seen;
+    for (const auto& [vertex, around] : facesAt) {
+        for (size_t i = 0; i < around.size(); i++) {
+            for (size_t j = i + 1; j < around.size(); j++) {
+                const uint32_t a = std::min(around[i], around[j]), b = std::max(around[i], around[j]);
+                if (!seen.insert((static_cast<uint64_t>(a) << 32) | b).second) continue;
+                int shared = 0;
+                for (int ca = 0; ca < 3; ca++) {
+                    for (int cb = 0; cb < 3; cb++) shared += mesh.triIndexes[a][ca] == mesh.triIndexes[b][cb];
+                }
+                if (shared != 1) continue;  // pairs sharing an edge already have their spring
+                springs.pairs.emplace_back(a, b);
+                springs.rest.push_back((Centroid(uv[a]) - Centroid(uv[b])).norm());
+            }
+        }
+    }
+}
+
 // Step 2 for one region: similarity motions of its triangles (translation, rotation, log scale) that bring
 // corresponding corners together and make areas proportional to 3D areas.
 int RelaxRegion(const std::vector<uint32_t>& faces, const std::vector<CornerPair>& pairs, const std::vector<double>& area3d,
-                const IsometricUvParams& params, std::vector<Triangle2>& uv)
+                const IsometricUvParams& params, std::vector<Triangle2>& uv, const NeighborSprings* springs = nullptr)
 {
     if (faces.size() < 2) return 0;
     // The fixed triangle: UV centroid closest to the region's area-weighted UV centroid.
@@ -279,7 +383,7 @@ int RelaxRegion(const std::vector<uint32_t>& faces, const std::vector<CornerPair
         return origin[f] + Vec2d(x[i], x[i + 1]) + scaleOf(i) * Rotate(rest[f][k], x[i + 2]);
     };
 
-    const size_t rows = 2 * pairs.size() + (authalic ? unknown.size() : 0);
+    const size_t rows = 2 * pairs.size() + (authalic ? unknown.size() : 0) + (springs ? springs->pairs.size() : 0);
     // Residuals (corner gaps, then the authalic terms) at the current x, and their Jacobian when asked for.
     const auto assemble = [&](Eigen::VectorXd& r, std::vector<Eigen::Triplet<double>>* entries) {
         r = Eigen::VectorXd::Zero(static_cast<int>(rows));
@@ -317,6 +421,33 @@ int RelaxRegion(const std::vector<uint32_t>& faces, const std::vector<CornerPair
                 r[row] = w * (restLogScale[f] + x[i + 3] - targetLogScale);
                 if (entries) entries->emplace_back(row, i + 3, w);
                 row++;
+            }
+        }
+        if (springs) {
+            // strength * (rest length - centroid distance), for pairs closer than their rest length. A triangle
+            // moves and scales about its own centroid, so its centroid moves with its translation alone.
+            int row = static_cast<int>(2 * pairs.size() + (authalic ? unknown.size() : 0));
+            const auto centroid = [&](uint32_t f, int& i) -> Vec2d {
+                const auto it = unknown.find(f);
+                i = (it == unknown.end()) ? -1 : perFace * it->second;
+                return (i < 0) ? origin[f] : Vec2d(origin[f] + Vec2d(x[i], x[i + 1]));
+            };
+            for (size_t s = 0; s < springs->pairs.size(); s++, row++) {
+                int ia = -1, ib = -1;
+                const Vec2d d = centroid(springs->pairs[s].first, ia) - centroid(springs->pairs[s].second, ib);
+                const double distance = d.norm();
+                if (distance >= springs->rest[s] || distance <= 0.0) continue;
+                r[row] = springs->strength * (springs->rest[s] - distance);
+                if (!entries) continue;
+                const Vec2d unit = d / distance;
+                if (ia >= 0) {
+                    entries->emplace_back(row, ia, -springs->strength * unit.x());
+                    entries->emplace_back(row, ia + 1, -springs->strength * unit.y());
+                }
+                if (ib >= 0) {
+                    entries->emplace_back(row, ib, springs->strength * unit.x());
+                    entries->emplace_back(row, ib + 1, springs->strength * unit.y());
+                }
             }
         }
     };
@@ -414,6 +545,27 @@ IsometricUvStats MakeIsometricUvs(const Mesh& mesh, const std::vector<int>& face
         stats.iterations = std::max(stats.iterations, RelaxRegion(faces, regionPairs[region], area3d, params, uv));
     }
     stats.meanGapAfter = MeanGap(uv, pairs);
+
+    if (params.enforceNoOverlaps) {
+        // Constraint enforcement: the relaxation again, with one-sided springs pushing neighboring triangles'
+        // centroids apart (triangles sharing an edge or a vertex). Each round both grow: every rest length by
+        // springRestGrowth of its starting value, the strength twofold; until no two triangles of the region overlap.
+        for (auto& [region, faces] : regionFaces) {
+            if (!RegionHasOverlap(faces, uv)) continue;
+            NeighborSprings springs = MakeNeighborSprings(regionPairs[region], uv, params.springStrength);
+            AddVertexNeighborSprings(mesh, faces, uv, springs);
+            const std::vector<double> startRest = springs.rest;
+            int round = 0;
+            for (; round < params.springRounds && RegionHasOverlap(faces, uv); round++) {
+                for (size_t s = 0; s < startRest.size(); s++) springs.rest[s] = startRest[s] * (1.0 + params.springRestGrowth * (round + 1));
+                RelaxRegion(faces, regionPairs[region], area3d, params, uv, &springs);
+                springs.strength = std::min(2.0 * springs.strength, params.springMaxStrength);
+            }
+            stats.springRounds = std::max(stats.springRounds, round);
+            stats.overlappingRegions += RegionHasOverlap(faces, uv);
+        }
+        stats.meanGapAfter = MeanGap(uv, pairs);
+    }
 
     if (params.fitToAtlas) {
         // Step 3: each region turned, scaled uniformly and moved so it fits tightly inside its atlas chart's
