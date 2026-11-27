@@ -63,6 +63,80 @@ double Median(std::vector<double> values)
     return values[mid];
 }
 
+// A turn, uniform scale and offset: p -> scale * R(angle) p + offset.
+struct FitTransform {
+    double angle = 0.0, scale = 1.0;
+    Vec2d offset = Vec2d::Zero();
+};
+
+// Convex hull (counter-clockwise, Andrew's monotone chain).
+std::vector<Vec2d> ConvexHull(std::vector<Vec2d> p)
+{
+    std::sort(p.begin(), p.end(), [](const Vec2d& a, const Vec2d& b) { return a.x() < b.x() || (a.x() == b.x() && a.y() < b.y()); });
+    p.erase(std::unique(p.begin(), p.end()), p.end());
+    if (p.size() < 3) return p;
+    const auto cross = [](const Vec2d& o, const Vec2d& a, const Vec2d& b) { return (a - o).x() * (b - o).y() - (a - o).y() * (b - o).x(); };
+    std::vector<Vec2d> hull(2 * p.size());
+    size_t k = 0;
+    for (size_t i = 0; i < p.size(); i++) {
+        while (k >= 2 && cross(hull[k - 2], hull[k - 1], p[i]) <= 0.0) k--;
+        hull[k++] = p[i];
+    }
+    for (size_t i = p.size() - 1, lower = k + 1; i-- > 0;) {
+        while (k >= lower && cross(hull[k - 2], hull[k - 1], p[i]) <= 0.0) k--;
+        hull[k++] = p[i];
+    }
+    hull.resize(k - 1);
+    return hull;
+}
+
+// The turn, uniform scale and offset that fit `points` as large as possible inside the box [lo, hi], centered:
+// the scale at a turn is min(box size / turned points' box size) per axis, and the best of eight turns
+// (k * 22.5 degrees) is kept.
+FitTransform FitIntoBox(const std::vector<Vec2d>& points, const Vec2d& lo, const Vec2d& hi)
+{
+    FitTransform t;
+    if (points.empty()) return t;
+    const std::vector<Vec2d> hull = ConvexHull(points);
+    const Vec2d size = hi - lo;
+    const auto turnedBox = [&](double angle, Vec2d& boxLo, Vec2d& boxHi) {
+        boxLo = Vec2d::Constant(std::numeric_limits<double>::infinity());
+        boxHi = -boxLo;
+        for (const Vec2d& p : hull) {
+            const Vec2d q = Rotate(p, angle);
+            boxLo = boxLo.cwiseMin(q);
+            boxHi = boxHi.cwiseMax(q);
+        }
+    };
+    const auto scaleAt = [&](double angle) {
+        Vec2d a, b;
+        turnedBox(angle, a, b);
+        const Vec2d have = b - a;
+        double scale = std::numeric_limits<double>::infinity();
+        for (int axis = 0; axis < 2; axis++) {
+            if (have[axis] > 0.0) scale = std::min(scale, size[axis] / have[axis]);
+        }
+        return (std::isfinite(scale) && scale > 0.0) ? scale : 1.0;
+    };
+    // Eight turns, k * 22.5 degrees (a box fit repeats every half turn, so these are eight distinct fits).
+    constexpr int kTurns = 8;
+    const double step = std::acos(-1.0) / kTurns;
+    double best = 0.0, bestScale = scaleAt(0.0);
+    for (int i = 1; i < kTurns; i++) {
+        const double angle = i * step, scale = scaleAt(angle);
+        if (scale > bestScale) {
+            bestScale = scale;
+            best = angle;
+        }
+    }
+    t.angle = best;
+    t.scale = scaleAt(best);
+    Vec2d boxLo, boxHi;
+    turnedBox(best, boxLo, boxHi);
+    t.offset = 0.5 * (lo + hi) - t.scale * 0.5 * (boxLo + boxHi);
+    return t;
+}
+
 // Pairs of corners (face, corner) that are the same mesh vertex in two triangles of one region that share
 // an edge.
 struct CornerPair {
@@ -342,37 +416,25 @@ IsometricUvStats MakeIsometricUvs(const Mesh& mesh, const std::vector<int>& face
     stats.meanGapAfter = MeanGap(uv, pairs);
 
     if (params.fitToAtlas) {
-        // Step 3: each region scaled uniformly about its box center and moved onto its atlas chart's box center,
-        // as large as fits: it touches the atlas box on one axis and is centered on the other.
-        struct Box {
-            Vec2d lo = Vec2d::Constant(std::numeric_limits<double>::infinity()), hi = Vec2d::Constant(-std::numeric_limits<double>::infinity());
-            void add(const Vec2d& p)
-            {
-                lo = lo.cwiseMin(p);
-                hi = hi.cwiseMax(p);
-            }
-        };
-        std::map<int, Box> atlas, relaxed;
+        // Step 3: each region turned, scaled uniformly and moved so it fits tightly inside its atlas chart's
+        // box: the turn is the one that allows the largest scale, and the region is centered in the box.
+        std::map<int, std::pair<Vec2d, Vec2d>> atlas;  // region -> box (lo, hi)
+        std::map<int, std::vector<Vec2d>> points;
         for (uint32_t f = 0; f < F; f++) {
+            auto [it, inserted] = atlas.try_emplace(faceRegion[f], Vec2d::Constant(std::numeric_limits<double>::infinity()),
+                                                    Vec2d::Constant(-std::numeric_limits<double>::infinity()));
             for (int c = 0; c < 3; c++) {
-                atlas[faceRegion[f]].add(mesh.texcoords[3 * f + c].cast<double>());
-                relaxed[faceRegion[f]].add(uv[f][c]);
+                const Vec2d a = mesh.texcoords[3 * f + c].cast<double>();
+                it->second.first = it->second.first.cwiseMin(a);
+                it->second.second = it->second.second.cwiseMax(a);
+                points[faceRegion[f]].push_back(uv[f][c]);
             }
         }
-        std::map<int, std::pair<double, Vec2d>> fit;  // region -> (scale, offset): p -> scale * p + offset
-        for (const auto& [region, a] : atlas) {
-            const Box& b = relaxed[region];
-            const Vec2d size = a.hi - a.lo, have = b.hi - b.lo;
-            double scale = std::numeric_limits<double>::infinity();
-            for (int axis = 0; axis < 2; axis++) {
-                if (have[axis] > 0.0) scale = std::min(scale, size[axis] / have[axis]);
-            }
-            if (!std::isfinite(scale) || !(scale > 0.0)) scale = 1.0;
-            fit[region] = {scale, 0.5 * (a.lo + a.hi) - scale * 0.5 * (b.lo + b.hi)};
-        }
+        std::map<int, FitTransform> fit;
+        for (const auto& [region, box] : atlas) fit[region] = FitIntoBox(points[region], box.first, box.second);
         for (uint32_t f = 0; f < F; f++) {
-            const auto& [scale, offset] = fit[faceRegion[f]];
-            for (Vec2d& c : uv[f]) c = scale * c + offset;
+            const FitTransform& t = fit[faceRegion[f]];
+            for (Vec2d& c : uv[f]) c = t.scale * Rotate(c, t.angle) + t.offset;
         }
     }
 
