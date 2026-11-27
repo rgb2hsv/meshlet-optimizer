@@ -57,8 +57,8 @@
           <li><a href="#r-time"><span class="num">4.3</span>Running time</a></li>
           <li><a href="#r-uv"><span class="num">4.4</span>Texture fidelity</a></li>
           <li><a href="#r-atlas"><span class="num">4.5</span>Generated atlases</a></li>
-          <li><a href="#r-validation"><span class="num">4.6</span>Validation</a></li>
-          <li><a href="#r-isouv"><span class="num">4.7</span>Isometric texture coordinates</a></li>
+          <li><a href="#r-isouv"><span class="num">4.6</span>Isometric texture coordinates</a></li>
+          <li><a href="#r-validation"><span class="num">4.7</span>Validation</a></li>
         </ol>
       </li>
       <li><a href="#limitations"><span class="num">5</span>Limitations</a></li>
@@ -480,10 +480,7 @@ meshlet-optimizer model.ply -o model.mlod --save-levels levels  # every level as
   <figcaption><span class="fig">Figure 15.</span> The generated atlas of metasphere level 2 as a UV grid in meshlet-viewer: nearly square cells (LSCM is conformal), continuous inside every chart, breaking only at chart borders.</figcaption>
 </figure>
 
-<h3 id="r-validation"><span class="num">4.6</span>Validation<a class="anchor" href="#r-validation" aria-label="Link to this section"></a></h3>
-<p>The repository's test (<code>ctest</code>) builds the metasphere with <code>--check --check-cracks</code>: it fails unless the <code>.mlod</code> is written, has at least two levels and no pair of levels violates the nesting invariant. All 45 level pairs pass. The written file is read back with meshlet-viewer's own loader for both format versions, and the cosplay output was checked the same way. Output is deterministic: repeated runs write byte-identical metasphere files apart from the stored build time.</p>
-
-<h3 id="r-isouv"><span class="num">4.7</span>Isometric texture coordinates<a class="anchor" href="#r-isouv" aria-label="Link to this section"></a></h3>
+<h3 id="r-isouv"><span class="num">4.6</span>Isometric texture coordinates<a class="anchor" href="#r-isouv" aria-label="Link to this section"></a></h3>
 <p>The isometric UVs of §<a href="#m-isouv">3.12</a> are shown on the coarsest level of a unit icosphere (20,480 triangles, five clustering passes, default parameters): level 5 has 372 triangles in five charts, large and strongly curved, which is the hardest case for flattening a chart with undistorted triangles. Figure 16 shows the level's charts before (the packed LSCM atlas) and after (isometric triangles after the rigid-body simulation, fitted back into their atlas boxes); Table 5 compares them.</p>
 
 <figure id="fig-isometric-level5">
@@ -512,6 +509,9 @@ meshlet-optimizer model.ply -o model.mlod --save-levels levels  # every level as
 </div>
 
 <p>Every triangle's angles now match its 3D triangle to 10<sup>−7</sup> rad, against up to 12° in the conformal atlas, and no triangle is flipped. Its area is exactly its chart's multiple of its 3D area (an area ratio of 1.00 everywhere, against 0.57–2.63 in the atlas), because the triangles never change size after step 1. No two triangles overlap by more than half a texel of a 4096² texture, where the simulation stops. The price is gaps: around the interior vertices of these charts the 3D angles sum to noticeably less than 2π, so rigid triangles cannot all meet, and the shortfall is left as thin slits along shared edges (mean gap 0.0036 in the unit square, about 15 texels at 4096²). Finer charts are flatter, and the gaps shrink with them: on the same mesh the mean gap is 0.0011 at level 4 and 6 × 10<sup>−6</sup> at level 0 (20,480 triangles), and no level has a pair overlapping by more than a texel. A chart this curved is better split than flattened; the hierarchy splits regions by triangle count only (§<a href="#m-split">3.8</a>), not by curvature.</p>
+
+<h3 id="r-validation"><span class="num">4.7</span>Validation<a class="anchor" href="#r-validation" aria-label="Link to this section"></a></h3>
+<p>The repository's test (<code>ctest</code>) builds the metasphere with <code>--check --check-cracks</code>: it fails unless the <code>.mlod</code> is written, has at least two levels and no pair of levels violates the nesting invariant. All 45 level pairs pass. The written file is read back with meshlet-viewer's own loader for both format versions, and the cosplay output was checked the same way. Output is deterministic: repeated runs write byte-identical metasphere files apart from the stored build time.</p>
 </section>
 
 <section id="limitations">
