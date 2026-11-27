@@ -509,6 +509,19 @@ void ProjectMosaicsToPlanes(ChartLayout& layout)
                 layout.totalBoundaryCount++;
             }
         }
+        // Orientation from the triangles' winding, not the vertex normals: LSCM builds every triangle counter-
+        // clockwise (ProjectTriangle) and pins vertices where this projection puts them, so a mirrored layout
+        // (normals pointing against the winding, as computed normals do for counter-clockwise meshes) leaves the
+        // pins unreachable by a conformal map and LSCM folds the chart to meet them.
+        double windingArea = 0.0;
+        for (const MosaicFace& mf : mosaic.faces) {
+            const Vector2d a = mosaic.getLocalVertex(mf.mapFace.x()).uv, b = mosaic.getLocalVertex(mf.mapFace.y()).uv,
+                           c = mosaic.getLocalVertex(mf.mapFace.z()).uv;
+            windingArea += (b - a).x() * (c - a).y() - (b - a).y() * (c - a).x();
+        }
+        if (windingArea < 0.0) {
+            for (MosaicVertex& mv : mosaic.vertexes) mv.uv.y() = -mv.uv.y();
+        }
         mosaic.edges.clear();
         // A boundary edge is used by a single face of the mosaic. Two boundary
         // endpoints are not enough: in small charts an interior edge (a chord)
