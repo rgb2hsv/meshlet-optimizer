@@ -47,6 +47,14 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
         .help("largest base chart, in triangles touching it")
         .scan<'i', int>()
         .default_value(d.cvt.regularization.maxTrianglesPerChart);
+    p.add_argument("--chart-fill")
+        .help("share of --chart-triangles each base chart aims at; sets the seed count")
+        .scan<'g', double>()
+        .default_value(d.cvt.chartFill);
+    p.add_argument("--cvt-chunk")
+        .help("triangles per parallel work item of the restricted Voronoi diagram (the result depends on it)")
+        .scan<'i', int>()
+        .default_value(d.cvt.chunkTriangles);
     p.add_argument("--cvt-lloyd")
         .help("Lloyd warm-up iterations")
         .scan<'i', int>()
@@ -187,6 +195,8 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
 
     MeshletParams& h = o.hierarchy;
     h.cvt.regularization.maxTrianglesPerChart = p.get<int>("--chart-triangles");
+    h.cvt.chartFill = p.get<double>("--chart-fill");
+    h.cvt.chunkTriangles = p.get<int>("--cvt-chunk");
     h.cvt.lloydIterations = p.get<int>("--cvt-lloyd");
     h.cvt.lbfgsIterations = p.get<int>("--cvt-lbfgs");
     h.cvt.minChartVertices = p.get<int>("--min-chart-vertices");
@@ -226,6 +236,14 @@ std::optional<int> ParseOptions(int argc, const char* const* argv, Options& opti
     h.uvFitToAtlas = !p.get<bool>("--no-uv-fit");
     h.uvEnforceNoOverlaps = !p.get<bool>("--no-uv-repulsion");
 
+    if (h.cvt.chunkTriangles < 1) {
+        std::cerr << "Invalid setting: --cvt-chunk must be >= 1" << std::endl;
+        return 2;
+    }
+    if (!(h.cvt.chartFill > 0.0) || h.cvt.chartFill > 1.0) {
+        std::cerr << "Invalid setting: --chart-fill must be in (0, 1]\n";
+        return 2;
+    }
     if (h.cvt.regularization.maxTrianglesPerChart < 0 || h.stopAtRegions < 1 || h.maxDepth < 0 || h.maxCliqueSize < 2 ||
         h.lscmIterations < 1 || h.lscmPaddingRings < 0 || !(h.packPadding >= 0.0) || h.splitAboveFaces < 0 ||
         !(h.resample.interiorFraction >= 0.0) || h.resample.interiorFraction > 1.0 || o.threads < 0) {

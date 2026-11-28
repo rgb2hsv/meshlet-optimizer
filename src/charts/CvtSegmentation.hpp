@@ -51,6 +51,16 @@ struct CvtSegmentationParams {
     // Used only when seedCount and spacing are both unset and there is no
     // regularization.maxTrianglesPerChart (which then sets the seed count).
     int verticesPerSeed = 512;
+    // With regularization.maxTrianglesPerChart (and no seedCount or spacing): the
+    // share of that limit each chart aims at, which sets the seed count to
+    // ceil(triangles / (chartFill * maxTrianglesPerChart)). Below 1, since
+    // triangles on chart borders count toward both sides and the cap splits
+    // whatever still overflows.
+    double chartFill = 0.375;
+    // Triangles per parallel work item of the restricted Voronoi diagram.
+    // Contributions are summed chunk by chunk in order, so the result does not
+    // depend on the thread count, but it does (by rounding) on this size.
+    int chunkTriangles = 256;
     // Lower bound on the spacing, in multiples of the average edge length, so
     // every Voronoi cell captures some vertices.
     double minSpacingInEdgeLengths = 2.0;
@@ -166,6 +176,7 @@ private:
     std::vector<double> triangleAreas_;
     double area_ = 0.0;
     double averageEdge_ = 0.0;
+    int64_t chunkTriangles_ = 256;  // CvtSegmentationParams::chunkTriangles of the running solve()
 };
 
 }  // namespace mopt

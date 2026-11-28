@@ -15,7 +15,8 @@ meshlet-viewer metasphere.mlod
 
 1. **Base charts.** Blue-noise seeds on the surface are relaxed to a restricted centroidal Voronoi
    tessellation (Lloyd, then L-BFGS). The cells are cleaned up into compact, disk-shaped charts of at most
-   `--chart-triangles` triangles, which become level 0. Their borders are straightened along mesh edges.
+   `--chart-triangles` triangles, which become level 0; there are enough seeds for each chart to aim at
+   `--chart-fill` (0.375) of that limit. Their borders are straightened along mesh edges.
 2. **Levels.** Each level clique-merges the regions of the one below. It flattens every merged region
    (planar start, then one LSCM solve), samples fewer interior points as 2D blue noise, relaxes them with
    a CVT, re-triangulates, lifts to 3D and snaps them onto the input surface. Large regions are split, and

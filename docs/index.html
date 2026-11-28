@@ -220,7 +220,7 @@
 <h3 id="m-charts"><span class="num">3.3</span>Base charts<a class="anchor" href="#m-charts" aria-label="Link to this section"></a></h3>
 <p>The base charts are the leaves of the hierarchy and the meshlets of level 0, so they should be compact, roughly equal in size, disk-shaped and below the meshlet ceiling. <code>CvtSegmentation</code> computes them as a restricted CVT:</p>
 <ol class="steps">
-  <li><strong>Seeds.</strong> The seed count is <i>n</i> = ⌈|<i>F</i>| / (0.375 · <i>T</i><sub>max</sub>)⌉ with <i>T</i><sub>max</sub> = <code>--chart-triangles</code> (256): charts aim at half the limit, since triangles on chart borders count toward both sides and an explicit cap handles the rest. Seeds are dart-thrown as Poisson-disk blue noise on the surface with radius 0.8 times the hexagonal-packing spacing of <i>n</i> points, on a spatial hash grid.</li>
+  <li><strong>Seeds.</strong> The seed count is <i>n</i> = ⌈|<i>F</i>| / (<i>f</i> · <i>T</i><sub>max</sub>)⌉ with <i>T</i><sub>max</sub> = <code>--chart-triangles</code> (256) and <i>f</i> = <code>--chart-fill</code> (0.375): charts aim at well under the limit, since triangles on chart borders count toward both sides and an explicit cap handles the rest. Seeds are dart-thrown as Poisson-disk blue noise on the surface with radius 0.8 times the hexagonal-packing spacing of <i>n</i> points, on a spatial hash grid.</li>
   <li><strong>Exact restricted Voronoi cells.</strong> Each triangle is clipped against the bisector planes of the seeds whose cells reach it, starting at the seed nearest its centroid and propagating across clipped edges; a security radius (twice the cell radius) ends clipping without a Delaunay triangulation <a href="#ref-yan">[4]</a>. Triangles are processed in fixed chunks whose contributions are summed in chunk order, so the result does not depend on the thread count.</li>
   <li><strong>Optimization.</strong> Four Lloyd iterations, then up to 40 L-BFGS iterations on <i>F</i> with the analytic gradient of §2.2, in units of the seed spacing.</li>
   <li><strong>Labels.</strong> Each vertex takes its nearest seed; fragments that are not the largest piece of their cell and charts under 16 vertices are absorbed by neighbours.</li>
@@ -567,6 +567,8 @@ meshlets cosplay.mlod          <span class="c"># meshlet-viewer</span></code></p
 <thead><tr><th>Option</th><th class="n">Default</th><th>Effect</th></tr></thead>
 <tbody>
 <tr><td><code>--chart-triangles</code></td><td class="n">256</td><td>Largest base chart, in triangles touching it; sets the seed count (§3.3).</td></tr>
+<tr><td><code>--cvt-chunk</code></td><td class="n">256</td><td>Triangles per parallel work item of the restricted Voronoi diagram; sums are taken chunk by chunk in order, so results do not depend on the thread count but do (by rounding) on this size.</td></tr>
+<tr><td><code>--chart-fill</code></td><td class="n">0.375</td><td>Share of <code>--chart-triangles</code> each base chart aims at: the seed count is ⌈|<i>F</i>| / (fill · <code>--chart-triangles</code>)⌉ (§3.3).</td></tr>
 <tr><td><code>--cvt-lloyd</code> / <code>--cvt-lbfgs</code></td><td class="n">4 / 40</td><td>Lloyd warm-up and L-BFGS iterations of the base CVT.</td></tr>
 <tr><td><code>--min-chart-vertices</code></td><td class="n">16</td><td>Smaller charts merge into a neighbour.</td></tr>
 <tr><td><code>--no-regularize</code></td><td class="n"></td><td>Skip opening, region competition and disk splitting.</td></tr>

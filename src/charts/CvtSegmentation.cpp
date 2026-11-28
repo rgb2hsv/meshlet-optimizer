@@ -362,7 +362,7 @@ CvtSegmentation::CellIntegrals CvtSegmentation::restrictedVoronoi(const std::vec
 
     // Triangles are processed in fixed chunks whose contributions are summed
     // in chunk order, so the result does not depend on the thread count.
-    constexpr int64_t kChunkSize = 256;
+    const int64_t kChunkSize = std::max<int64_t>(1, chunkTriangles_);
     const int64_t triCount = static_cast<int64_t>(triangles_.size());
     const int64_t chunkCount = (triCount + kChunkSize - 1) / kChunkSize;
     std::vector<std::vector<Contribution>> chunks(chunkCount);
@@ -633,6 +633,7 @@ int CvtSegmentation::labelVertices(const std::vector<V3d>& seeds, int minChartVe
 
 int CvtSegmentation::solve(const CvtSegmentationParams& params, std::vector<int>& vertexLabels)
 {
+    chunkTriangles_ = std::max(1, params.chunkTriangles);
     if (triangles_.empty() || area_ <= 0.0) {
         vertexLabels.assign(positions_.size(), 0);
         return positions_.empty() ? 0 : 1;
@@ -642,9 +643,10 @@ int CvtSegmentation::solve(const CvtSegmentationParams& params, std::vector<int>
     double spacing = params.spacing;
     const int maxTriangles = params.regularize ? params.regularization.maxTrianglesPerChart : 0;
     if (seedCount <= 0 && spacing <= 0.0 && maxTriangles > 0) {
-        // Aim charts at ~50% of the limit: triangles on chart borders count
+        // Aim charts at chartFill of the limit: triangles on chart borders count
         // toward both sides, and the cap splits whatever still overflows.
-        seedCount = std::max<int>(1, static_cast<int>(std::ceil(triangles_.size() / (0.375 * maxTriangles))));
+        const double fill = params.chartFill > 0.0 ? params.chartFill : 0.375;
+        seedCount = std::max<int>(1, static_cast<int>(std::ceil(triangles_.size() / (fill * maxTriangles))));
     } else if (seedCount <= 0 && spacing <= 0.0) {
         seedCount = std::max<int>(1, static_cast<int>(positions_.size()) / std::max(1, params.verticesPerSeed));
     }
